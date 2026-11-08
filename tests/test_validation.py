@@ -8,6 +8,7 @@ from src.validation import (
     apply_fixes,
     check_amounts,
     check_dates,
+    check_duplicate_membership_ids,
     check_duplicate_names,
     check_instalments,
     check_last_payment_date,
@@ -86,7 +87,7 @@ def test_known_membership_types_pass(raw):
     assert check_membership_type(row(membership_type=raw), 1) == []
 
 
-@pytest.mark.parametrize("raw", ["0", "-1", "1.5", "two", ""])
+@pytest.mark.parametrize("raw", ["0", "-1", "1.5", "two", "", "²", "2²", "١"])
 def test_instalments_below_one_or_not_an_integer_must_be_corrected(raw):
     assert codes(check_instalments(row(instalments=raw), 5)) == [
         ("instalments", "invalid_instalments", ("enter_manually",)),
@@ -96,6 +97,11 @@ def test_instalments_below_one_or_not_an_integer_must_be_corrected(raw):
 @pytest.mark.parametrize("raw", ["1", " 3 "])
 def test_whole_instalments_of_at_least_one_pass(raw):
     assert check_instalments(row(instalments=raw), 1) == []
+
+
+def test_superscript_instalments_are_reported_not_a_crash():
+    report = validate([row(instalments="²")], list(row()))
+    assert [i.code for i in report.issues] == ["invalid_instalments"]
 
 
 def test_paid_more_than_contract_must_be_corrected():
@@ -220,7 +226,7 @@ def test_clean_book1_produces_an_empty_non_fatal_report():
 
 
 def test_blank_rows_are_skipped_but_keep_their_row_numbers():
-    rows = [row(), {c: "" for c in CANONICAL}, row(instalments="0")]
+    rows = [row(), {c: "" for c in CANONICAL}, row(membership_id="MS-002", instalments="0")]
     report = validate(rows, CANONICAL)
     assert [(i.row_number, i.code) for i in report.issues] == [(3, "invalid_instalments")]
 
@@ -426,3 +432,50 @@ def test_group_already_carrying_conflicting_ids_offers_only_different_people():
     assert issue.fix_options == ("different_people",)
     fixed = apply_fixes(rows, [Fix(1, "member_name", issue.fix_options[0])])
     assert check_duplicate_names(fixed) == []
+
+
+# --- Duplicate Membership IDs: two rows one contract would hide receivable ---
+
+
+def test_rows_sharing_a_typed_membership_id_are_flagged_once_naming_every_row():
+    rows = [row(membership_id="MS-1"), row(member_id="M002", member_name="Vandana Rao",
+                                           membership_id="MS-2"),
+            row(membership_id=" MS-1 "), row(member_id="M003", member_name="Arjun Menon",
+                                             membership_id="MS-1")]
+    issues = check_duplicate_membership_ids(rows)
+    assert [(i.row_number, i.column, i.code, i.fix_options, i.related_rows) for i in issues] == [
+        (1, "membership_id", "duplicate_membership_id", ("enter_manually",), (1, 3, 4)),
+    ]
+    assert "MS-1" in issues[0].message and "1, 3, 4" in issues[0].message
+
+
+def test_generated_membership_id_colliding_with_a_typed_one_is_flagged():
+    # Row 1 has no ID, so assembly would call it M001-01: the ID typed on row 2.
+    rows = [row(membership_id=""), row(membership_id="M001-01")]
+    issues = check_duplicate_membership_ids(rows)
+    assert [(i.code, i.related_rows) for i in issues] == [("duplicate_membership_id", (1, 2))]
+    assert "M001-01" in issues[0].message
+
+
+def test_distinct_and_generated_membership_ids_pass():
+    rows = [row(membership_id=""), row(membership_id=""), row(membership_id="MS-9")]
+    assert check_duplicate_membership_ids(rows) == []
+
+
+def test_blank_rows_are_ignored_but_counted_for_duplicate_membership_ids():
+    blank = {k: "" for k in row()}
+    rows = [row(membership_id="MS-1"), blank, row(membership_id="MS-1")]
+    assert [i.related_rows for i in check_duplicate_membership_ids(rows)] == [(1, 3)]
+
+
+def test_validate_reports_duplicate_membership_ids():
+    report = validate([row(), row()], list(row()))
+    assert [i.code for i in report.issues] == ["duplicate_membership_id"]
+    assert not report.is_clean
+
+
+def test_entering_a_new_membership_id_resolves_the_duplicate():
+    rows = [row(membership_id="MS-1"), row(membership_id="MS-1")]
+    issue = check_duplicate_membership_ids(rows)[0]
+    fixed = apply_fixes(rows, [Fix(issue.row_number, issue.column, "enter_manually", "MS-7")])
+    assert validate(fixed, list(row())).is_clean

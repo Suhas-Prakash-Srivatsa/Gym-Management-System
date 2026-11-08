@@ -35,3 +35,4 @@ Turn bad input into specific, answerable questions — one per row, naming the c
 ## Comments
 
 - 2026-11-08: Implemented, reviewed and committed. Book1_errors.csv yields 9 issues (Vandana and Rakesh rows each hit two rules).
+- 2026-11-08: Follow-up committed. Added `check_duplicate_membership_ids`, which flags rows that would assemble under one Membership ID (compared after `<member_key>-NN` generation, so a generated ID colliding with a typed one is caught); one issue per ID, anchored at its first row, fixed with `enter_manually`. `check_instalments` now requires ASCII digits, so "²" is reported instead of crashing. The identity scheme (`is_blank_row`, `member_key`, `generate_membership_id`, `effective_membership_ids`) moved to `src/identity.py`, shared by validation and assembly.

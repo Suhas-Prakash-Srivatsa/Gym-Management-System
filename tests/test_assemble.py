@@ -187,3 +187,36 @@ def test_generated_ids_number_in_sheet_order_for_name_keyed_members():
 def test_empty_membership_id_cell_is_generated_too():
     dataset = build_dataset([row(membership_id="MS-001"), row(membership_id=" ")])
     assert [ms.membership_id for ms in dataset.memberships] == ["MS-001", "M001-02"]
+
+
+@pytest.mark.parametrize("rows", [
+    [row(membership_id="MS-1"), row(membership_id="MS-1")],
+    [row(membership_id=""), row(membership_id="M001-01")],
+    [row(member_id="", membership_id=""), row(member_id="", membership_id="suhas prakash-01")],
+])
+def test_colliding_membership_ids_never_reach_assembly_from_a_clean_report(rows):
+    from src.validation import validate
+
+    assert not validate(rows, list(row())).is_clean
+
+
+def test_every_clean_sheet_assembles_unique_membership_and_payment_ids():
+    from src.validation import validate
+
+    rows, columns = read_rows(FILES / "Book1.csv")
+    for sheet in (rows, _without_membership_id(rows)):
+        assert validate(sheet, columns).is_clean
+        dataset = build_dataset(sheet)
+        ids = [ms.membership_id for ms in dataset.memberships]
+        assert len(ids) == len(set(ids)) == 26
+        assert len({p.payment_id for p in dataset.payments}) == len(dataset.payments)
+
+
+def test_validation_and_assembly_share_one_effective_id_scheme():
+    from src.identity import effective_membership_ids
+
+    blank = {k: "" for k in row()}
+    rows = [row(membership_id=""), blank, row(membership_id="MS-5"), row(membership_id="")]
+    assert effective_membership_ids(rows) == ["M001-01", None, "MS-5", "M001-03"]
+    assert [ms.membership_id for ms in build_dataset(rows).memberships] == [
+        "M001-01", "MS-5", "M001-03"]

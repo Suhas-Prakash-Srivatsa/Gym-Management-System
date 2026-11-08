@@ -8,23 +8,21 @@ trust without a single check.
 from datetime import datetime, time
 
 from src.dates import parse_date
+from src.identity import (
+    effective_membership_ids,
+    generate_membership_id,
+    member_key,
+)
 from src.models import Dataset, Member, Membership, MembershipType, Payment, RawRow
 from src.money import parse_money
-from src.validation import is_blank_row
+
+# member_key and generate_membership_id live in identity.py (shared with
+# validation) and are re-exported here as part of assembly's interface.
+__all__ = ["member_key", "generate_membership_id", "opening_payment", "build_dataset"]
 
 
 def _value(row: RawRow, column: str) -> str:
     return (row.get(column) or "").strip()
-
-
-def member_key(row: RawRow) -> str:
-    """The row's Member identity: its Member ID, else its normalised name."""
-    return _value(row, "member_id") or " ".join(_value(row, "member_name").casefold().split())
-
-
-def generate_membership_id(member_key: str, n: int) -> str:
-    """The n-th (1-based) Membership ID for a Member whose sheet gave none."""
-    return f"{member_key}-{n:02d}"
 
 
 def opening_payment(membership: Membership, row: RawRow) -> Payment | None:
@@ -57,22 +55,21 @@ def build_dataset(rows: list[RawRow]) -> Dataset:
 
     Each Member is created from the first row bearing its key, before any of
     its Memberships, so no Membership can name a Member that does not exist.
-    A Membership ID missing from the sheet is generated as `<member_key>-NN`,
-    numbering that Member's rows in sheet order. Opening Balance Payments are
+    A Membership ID missing from the sheet is generated as `<member_key>-NN`
+    by `identity.effective_membership_ids`, the scheme validation also checks
+    for collisions. Opening Balance Payments are
     added for every row with money already paid.
     """
     members: dict[str, Member] = {}
     memberships: list[Membership] = []
     payments: list[Payment] = []
-    seen: dict[str, int] = {}  # member key -> that Member's rows so far
-    for row in rows:
-        if is_blank_row(row):
+    for row, membership_id in zip(rows, effective_membership_ids(rows)):
+        if membership_id is None:  # a blank row
             continue
         key = member_key(row)
         members.setdefault(key, Member(member_id=key, name=_value(row, "member_name")))
-        seen[key] = seen.get(key, 0) + 1
         membership = Membership(
-            membership_id=_value(row, "membership_id") or generate_membership_id(key, seen[key]),
+            membership_id=membership_id,
             member_id=key,
             type=MembershipType.parse(_value(row, "membership_type")),
             joined_on=parse_date(_value(row, "date_joined")),

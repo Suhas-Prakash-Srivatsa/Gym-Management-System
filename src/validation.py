@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from src.dates import parse_date
+from src.identity import effective_membership_ids, is_blank_row
 from src.models import MembershipType, RawRow
 from src.money import parse_money
 
@@ -104,9 +105,12 @@ def check_membership_type(row: RawRow, row_number: int) -> list[Issue]:
 
 
 def check_instalments(row: RawRow, row_number: int) -> list[Issue]:
-    """A whole number, at least 1."""
+    """A whole number written in ASCII digits, at least 1.
+
+    `str.isdigit` alone is not enough: it accepts "²", which `int` rejects.
+    """
     raw = _value(row, "instalments")
-    if raw.isdigit() and int(raw) >= 1:
+    if raw.isascii() and raw.isdigit() and int(raw) >= 1:
         return []
     return [Issue(row_number, "instalments", "invalid_instalments",
                   f"Row {row_number}: Installments '{raw}' must be a whole number of at least 1.",
@@ -235,19 +239,37 @@ def check_duplicate_names(rows: list[RawRow]) -> list[Issue]:
     return issues
 
 
-def is_blank_row(row: RawRow) -> bool:
-    """Every cell empty or whitespace, e.g. the `,,,,` lines Excel CSV exports leave.
-
-    Such a row is not a Membership: validate skips it, and assembly must too.
-    """
-    return not any((v or "").strip() for v in row.values())
-
-
 def check_member_name(row: RawRow, row_number: int) -> list[Issue]:
     if _value(row, "member_name"):
         return []
     return [Issue(row_number, "member_name", "missing_member_name",
                   f"Row {row_number}: Member Name is empty.", ("enter_manually",))]
+
+
+def check_duplicate_membership_ids(rows: list[RawRow]) -> list[Issue]:
+    """Two rows that would assemble under one Membership ID.
+
+    Compares the IDs assembly will actually use (`effective_membership_ids`),
+    so a generated `M001-01` colliding with one typed in the sheet is caught
+    too. Left unflagged, both rows' Payments would count against each
+    contract and the receivable would vanish. One issue per ID, anchored at
+    its first row and spanning all of them; the owner types a new ID.
+    """
+    groups: dict[str, list[int]] = {}
+    for n, membership_id in enumerate(effective_membership_ids(rows), start=1):
+        if membership_id is not None:
+            groups.setdefault(membership_id, []).append(n)
+    issues = []
+    for membership_id, numbers in groups.items():
+        if len(numbers) > 1:
+            listed = ", ".join(str(n) for n in numbers)
+            issues.append(Issue(
+                numbers[0], "membership_id", "duplicate_membership_id",
+                f"Rows {listed} would all have Membership ID '{membership_id}'. "
+                "Each Membership needs its own ID; enter a different one.",
+                ("enter_manually",),
+                tuple(numbers)))
+    return issues
 
 
 ROW_RULES = (
@@ -287,6 +309,7 @@ def validate(rows: list[RawRow], columns: list[str]) -> Report:
             for rule in ROW_RULES:
                 issues += rule(r, n)
     issues += check_duplicate_names(rows)
+    issues += check_duplicate_membership_ids(rows)
     return Report(tuple(issues), is_fatal=False)
 
 
