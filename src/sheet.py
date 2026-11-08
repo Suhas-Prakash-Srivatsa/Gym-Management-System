@@ -6,6 +6,8 @@ value; that happens once, at the validation/assembly boundary.
 
 import csv
 import io
+import zipfile
+from xml.etree.ElementTree import ParseError
 from datetime import date, datetime
 from pathlib import Path
 
@@ -60,10 +62,16 @@ def read_rows(file) -> tuple[list[RawRow], list[str]]:
     lists those for reporting.
     """
     name, data = _read_bytes(file)
-    records = _xlsx_records(data) if name.lower().endswith(".xlsx") else _csv_records(data)
-    header = next(records, [])
-    columns = [_column_name(h) for h in header]
-    rows = [dict(zip(columns, record)) for record in records if record]
+    records = (_xlsx_records(name, data) if name.lower().endswith(".xlsx")
+               else _csv_records(data))
+    try:
+        header = next(records, [])
+        columns = [_column_name(h) for h in header]
+        rows = [dict(zip(columns, record)) for record in records if record]
+    except csv.Error as exc:  # e.g. a cell over the csv module's field size limit
+        raise ValueError(f"{name or 'The sheet'} cannot be read as CSV ({exc}). Check it is "
+                         "the members sheet, saved from Excel as 'CSV UTF-8' or as .xlsx."
+                         ) from exc
     return rows, columns
 
 
@@ -84,11 +92,13 @@ def _csv_records(data: bytes):
     return csv.reader(io.StringIO(data.decode("utf-8-sig"), newline=""))
 
 
-def _xlsx_records(data: bytes):
+def _xlsx_records(name: str, data: bytes):
     """First worksheet of an .xlsx, each cell rendered as the string the owner sees.
 
     Excel stores dates as dates, not text; they are rendered ISO (`2026-06-01`)
-    so the single parsing boundary still receives a string.
+    so the single parsing boundary still receives a string. A file that is not
+    a real workbook (a renamed file, a broken download) is a ValueError naming
+    it, never openpyxl's own exception.
     """
     try:
         import openpyxl
@@ -97,15 +107,38 @@ def _xlsx_records(data: bytes):
             "Reading .xlsx sheets needs the openpyxl package: pip install openpyxl "
             "(or save the sheet as CSV)."
         ) from exc
-    workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    from openpyxl.utils.exceptions import InvalidFileException
+    # The bytes are already in memory, so an OSError from here on is openpyxl
+    # parsing ("File contains no valid workbook part"), never a lock or a
+    # missing file; those were raised by _read_bytes with their own messages.
+    # In read-only mode the worksheet XML is parsed lazily, during iteration.
+    # Only openpyxl's calls sit inside the catches, so a bug in our own cell
+    # rendering surfaces as itself, not as a blameless file being "unreadable".
+    unreadable = (zipfile.BadZipFile, InvalidFileException, KeyError, OSError, ParseError,
+                  IndexError)
+    message = (f"{name or 'The sheet'} is not a readable Excel file. Save it again from "
+               "Excel as .xlsx or as CSV, then try again.")
+    workbook = None
     try:
-        for cells in workbook.worksheets[0].iter_rows(values_only=True):
+        try:
+            workbook = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            rows = workbook.worksheets[0].iter_rows(values_only=True)
+        except unreadable as exc:
+            raise ValueError(message) from exc
+        while True:
+            try:
+                cells = next(rows)
+            except StopIteration:
+                return
+            except unreadable as exc:
+                raise ValueError(message) from exc
             if all(c is None for c in cells):
                 yield []
             else:
                 yield [_cell_text(c) for c in cells]
     finally:
-        workbook.close()
+        if workbook is not None:
+            workbook.close()
 
 
 def _cell_text(value) -> str:

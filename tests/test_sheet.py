@@ -163,3 +163,52 @@ def test_raw_row_type_lives_in_the_core_vocabulary():
     import src.sheet
 
     assert src.sheet.RawRow is src.models.RawRow
+
+
+# --- Ticket 14 rework 3: only openpyxl's own failures become "not readable" -------------
+
+def _xlsx_bytes(*rows):
+    openpyxl = pytest.importorskip("openpyxl")
+    workbook = openpyxl.Workbook()
+    for row in rows:
+        workbook.active.append(list(row))
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+class _Named(io.BytesIO):
+    def __init__(self, data, name):
+        super().__init__(data)
+        self.name = name
+
+
+@pytest.mark.parametrize("bug", [KeyError, IndexError, OSError])
+def test_a_bug_in_our_cell_rendering_is_not_blamed_on_the_file(monkeypatch, bug):
+    def broken(value):
+        raise bug("our bug")
+
+    monkeypatch.setattr("src.sheet._cell_text", broken)
+    upload = _Named(_xlsx_bytes(["Name", "Amount"], ["Suhas", 12000]), "members.xlsx")
+    with pytest.raises(bug, match="our bug"):
+        read_rows(upload)
+
+
+def test_a_date_cell_in_an_xlsx_reads_as_its_iso_date():
+    from datetime import date, datetime
+
+    upload = _Named(_xlsx_bytes(["Name", "Joined", "Last Payment Date"],
+                                ["Suhas", date(2026, 6, 1), datetime(2026, 7, 1, 9, 30)]),
+                    "members.xlsx")
+    rows, _ = read_rows(upload)
+    assert rows == [{"member_name": "Suhas", "date_joined": "2026-06-01",
+                     "last_payment_date": "2026-07-01T09:30:00"}]
+
+
+def test_a_plain_date_value_renders_as_its_iso_date():
+    # openpyxl 3.1.5 hands back date cells as datetime, so no real .xlsx reaches the
+    # `date` branch of _cell_text; it is pinned directly, as the owner would see it.
+    from datetime import date
+
+    from src.sheet import _cell_text
+    assert _cell_text(date(2026, 6, 1)) == "2026-06-01"

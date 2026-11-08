@@ -1,8 +1,9 @@
 """Independent acceptance tests for ticket 10 (upload and in-dashboard fixing), by the tester.
 
 Driven through Streamlit's AppTest in path mode on COPIES of the fixtures in
-tmp_path, with GYM_TODAY pinned. save_upload is exercised directly, because
-AppTest cannot drive st.file_uploader.
+tmp_path, with GYM_TODAY pinned. save_upload is exercised directly here; the
+upload screen itself (ticket 14) is driven through AppTest in
+tests/test_upload_screen.py.
 """
 
 import os
@@ -123,7 +124,7 @@ def test_owner_questions_start_unanswered_and_nothing_is_written(monkeypatch, er
     at = start(monkeypatch, errors_sheet)
     assert at.radio(key="duplicate_name:3:member_name:option").value is None
     assert at.radio(key="date_missing_year:1:date_joined:option").value is None
-    assert all(r.value is None for r in at.radio if r.key != "mode")
+    assert all(r.value is None for r in at.radio)
     assert at.button(key="apply_fixes").disabled
     # Typing a value without picking "Type the correct value" is still no answer.
     at.text_input(key="date_missing_year:1:date_joined:value").input("2026-06-01")
@@ -156,8 +157,7 @@ def test_ticket_flow_then_rerun_asks_nothing_and_the_sheet_never_changes(monkeyp
 
     again = start(monkeypatch, errors_sheet)  # a fresh session: a later run
     assert again.metric and not issue_tables(again)
-    assert not [r for r in again.radio if r.key != "mode"] and not again.text_input(
-        key="sheet_path").value == ""
+    assert not again.radio and not [t for t in again.text_input if t.key == "sheet_path"]
     assert "corrected data" in " ".join(i.value for i in again.info)
     assert fp(errors_sheet) == before
 
@@ -231,7 +231,7 @@ def test_fatal_missing_column_stops_with_instructions(monkeypatch, tmp_path):
     sheet.write_text("Member Name,Membership Type,Date Joined,Membership Amount,Installments\n"
                      "A,Yearly,2026-01-01,1000,1\n", encoding="utf-8")
     at = start(monkeypatch, sheet)
-    assert not at.metric and not at.button and not [r for r in at.radio if r.key != "mode"]
+    assert not at.metric and not at.button and not at.radio
     text = " ".join(e.value for e in at.error)
     assert "Paid Amount" in " ".join(at.dataframe[0].value["Problem"])
     assert "add or rename the column" in text

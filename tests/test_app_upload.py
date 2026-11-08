@@ -134,7 +134,7 @@ def test_a_rerun_uses_the_corrections_and_asks_nothing(tmp_path, monkeypatch):
     answer_everything(run_app(monkeypatch, sheet))
     before = fingerprint(sheet)
     at = run_app(monkeypatch, sheet)
-    assert len(at.radio) == 1  # only the path/upload mode switch
+    assert not at.radio  # no questions (and no path/upload switch since ticket 14)
     assert not issue_tables(at)
     assert tiles_shown(at) == FIXED_TILES
     assert "members_clean.csv" in texts(at.info)
@@ -245,10 +245,18 @@ def test_a_file_locked_by_excel_is_a_message_not_a_traceback(tmp_path, monkeypat
     assert "payments.csv" in texts(at.error) and "Excel" in texts(at.error)
 
 
-@pytest.mark.parametrize("given", ["", "C:/no/such/sheet.csv"])
-def test_no_sheet_or_a_missing_one_is_explained(tmp_path, monkeypatch, given):
-    at = run_app(monkeypatch, given)
-    assert texts(at.info) or texts(at.error)
+def test_a_missing_sheet_is_explained(tmp_path, monkeypatch):
+    at = run_app(monkeypatch, "C:/no/such/sheet.csv")
+    assert "no file" in texts(at.error)
+    assert tiles_shown(at) == {}
+
+
+def test_no_sheet_given_opens_the_upload_screen(tmp_path, monkeypatch):
+    # Ticket 14: the owner's route. pytest's own argv must not pose as a path.
+    monkeypatch.setattr("sys.argv", ["app.py"])
+    monkeypatch.setenv("GYM_DATA_DIR", str(tmp_path / "data"))
+    at = run_app(monkeypatch, "")
+    assert at.file_uploader and not at.text_input and not at.radio  # upload screen only
     assert tiles_shown(at) == {}
 
 
@@ -291,7 +299,7 @@ def test_the_sheet_path_can_come_from_the_command_line(tmp_path, monkeypatch):
     at = AppTest.from_file(str(APP), default_timeout=30)
     at.run()
     assert not at.exception
-    assert at.text_input(key="sheet_path").value == str(sheet)
+    assert not [t for t in at.text_input if t.key == "sheet_path"] and not at.file_uploader
     assert tiles_shown(at) == BOOK1_TILES
 
 

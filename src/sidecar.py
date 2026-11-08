@@ -7,6 +7,7 @@ the input's folder; on later runs the cleaned sidecar takes precedence, and
 """
 
 import csv
+import io
 import os
 import re
 from dataclasses import dataclass
@@ -122,6 +123,10 @@ def resolve_input(input_path) -> ResolvedInput:
 # --- Uploads and stale corrections ---
 
 BACKUP_SUFFIX = ".bak"
+UPLOAD_TYPES = (".csv", ".xlsx")  # what sheet.read_rows can read
+# The name is used twice (folder and file), and Windows paths stop at 260
+# characters unless long paths are enabled, so names are kept well short of it.
+MAX_UPLOAD_NAME = 80
 _INVALID_NAME_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
 _RESERVED_STEMS = {"CON", "PRN", "AUX", "NUL",
                    *(f"COM{n}" for n in range(1, 10)), *(f"LPT{n}" for n in range(1, 10))}
@@ -137,9 +142,60 @@ def _check_upload_name(name: str) -> None:
     if name.split(".")[0].strip().upper() in _RESERVED_STEMS:
         raise ValueError(f"The file name {name!r} is reserved by Windows. Rename it and "
                          "upload again.")
+    if len(name) > MAX_UPLOAD_NAME:
+        raise ValueError(f"The file name is too long ({len(name)} characters). Rename it to "
+                         f"at most {MAX_UPLOAD_NAME} characters and upload again.")
     if name.endswith((".", " ")):
         raise ValueError(f"The file name {name!r} ends with a dot or a space, which Windows "
                          "does not allow. Rename it and upload again.")
+
+
+def _folder_name(name: str) -> str:
+    return "_".join(filter(None, (Path(name).stem, Path(name).suffix[1:])))
+
+
+def _working_copy_path(data_dir, filename: str) -> Path:
+    name = re.split(r"[\\/]", filename)[-1]  # base name only, whichever separator
+    _check_upload_name(name)
+    _refuse_sidecar_name(Path(name))
+    return Path(data_dir).resolve() / _folder_name(name) / name
+
+
+def _is_working_copy(path: Path) -> bool:
+    return (path.is_file() and path.suffix.casefold() in UPLOAD_TYPES
+            and path.name.casefold() not in (PAYMENTS_NAME, CLEAN_MEMBERS_NAME)
+            and path.parent.name == _folder_name(path.name))
+
+
+def _last_used(folder: Path) -> int:
+    return max(os.stat(f).st_mtime_ns for f in folder.iterdir() if f.is_file())
+
+
+def working_copies(data_dir) -> list[Path]:
+    """The sheets uploaded earlier, most recently used first, so the owner can reopen one.
+
+    A working copy is `<data_dir>/<stem>_<ext>/<name>` as `save_upload` lays it
+    out. "Used" means the newest modification time of any file in its folder
+    (the sheet, `payments.csv`, `members_clean.csv`, backups), so uploading,
+    recording a payment or saving corrections all count; merely opening it
+    does not, because opening writes nothing. Ties go by name, so the order is
+    stable. A missing `data_dir` means no working copies yet.
+    """
+    data = Path(data_dir).resolve()
+    if not data.is_dir():
+        return []
+    copies = [f for folder in data.iterdir() if folder.is_dir()
+              for f in folder.iterdir() if _is_working_copy(f)]
+    by_name = sorted(copies, key=lambda p: p.name.casefold())
+    return sorted(by_name, key=lambda p: _last_used(p.parent), reverse=True)
+
+
+def _check_content(path: Path, data: bytes) -> None:
+    if path.suffix.casefold() not in UPLOAD_TYPES:
+        raise ValueError(f"{path.name} is not a members sheet this tool can read. Upload a "
+                         "CSV (.csv) or Excel (.xlsx) file.")
+    if not data:
+        raise ValueError(f"{path.name} is empty. Upload the members sheet with its rows in it.")
 
 
 def save_upload(data_dir, filename: str, data: bytes) -> Path:
@@ -153,11 +209,9 @@ def save_upload(data_dir, filename: str, data: bytes) -> Path:
     any earlier corrections stale (`corrections_stale`) rather than silently
     mixing them with the new sheet. The owner's own file is never involved.
     """
-    name = re.split(r"[\\/]", filename)[-1]  # base name only, whichever separator
-    _check_upload_name(name)
-    _refuse_sidecar_name(Path(name))
-    folder = Path(data_dir).resolve() / "_".join(filter(None, (Path(name).stem, Path(name).suffix[1:])))
-    path = folder / name
+    path = _working_copy_path(data_dir, filename)
+    _check_content(path, data)
+    folder = path.parent
     if path.exists() and path.read_bytes() == data:
         return path
     folder.mkdir(parents=True, exist_ok=True)
@@ -165,6 +219,45 @@ def save_upload(data_dir, filename: str, data: bytes) -> Path:
     temp.write_bytes(data)
     os.replace(temp, path)
     return path
+
+
+@dataclass(frozen=True)
+class SavedUpload:
+    """What happened to an upload, so the shell can tell the owner."""
+
+    path: Path            # the working copy, to open like any sheet
+    changed: bool         # bytes were written: a first upload, or different from the copy
+    kept_payments: bool   # an earlier payments.csv for this sheet name was left in place
+
+
+def _check_readable(name: str, data: bytes) -> None:
+    upload = io.BytesIO(data)
+    upload.name = name
+    try:
+        read_rows(upload)
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{name} is not a UTF-8 CSV. In Excel, save it as 'CSV UTF-8' or "
+                         "as .xlsx, then upload again.") from exc
+
+
+def receive_upload(data_dir, filename: str, data: bytes) -> SavedUpload:
+    """`save_upload`, reporting whether the copy changed and earlier payments were kept.
+
+    Re-uploading a sheet under the same name reaches the same folder, so its
+    `payments.csv` and `members_clean.csv` are never touched. Identical bytes
+    leave the copy (and its mtime) alone, so no stale-corrections prompt fires.
+
+    The bytes are read as a sheet before anything is written, so an upload the
+    tool cannot read (not UTF-8, a broken .xlsx) leaves nothing in `data_dir`
+    and never replaces a good copy; it is a ValueError the owner can act on.
+    """
+    path = _working_copy_path(data_dir, filename)
+    _check_content(path, data)
+    _check_readable(path.name, data)
+    previous = path.read_bytes() if path.is_file() else None
+    kept = payments_path(path).exists()
+    saved = save_upload(data_dir, filename, data)
+    return SavedUpload(saved, changed=previous != data, kept_payments=kept)
 
 
 def corrections_stale(input_path) -> bool:

@@ -4,9 +4,16 @@ This file only loads files, calls `src/`, renders what comes back and
 collects the owner's answers. It holds no arithmetic, no date comparison and
 no business rule; when one seems needed, it belongs in `src/`.
 
-Run:  streamlit run app.py -- path/to/sheet.csv
-Env:  GYM_SHEET  default sheet path (instead of the CLI argument)
-      GYM_TODAY  pin today's date, e.g. 2026-11-08 (tests, demos)
+Run:  streamlit run app.py
+      Opens on the upload screen, the owner's way in. The uploaded sheet is
+      kept as a working copy under the data folder (data/<stem>_<ext>/<name>),
+      with payments.csv and members_clean.csv beside it; earlier uploads are
+      offered for reopening, most recently used first.
+Dev:  streamlit run app.py -- path/to/sheet.csv
+      Opens that sheet directly, skipping the upload screen (developers, tests).
+Env:  GYM_SHEET     sheet path, as the CLI argument does (developers, tests)
+      GYM_DATA_DIR  folder for upload working copies, instead of ./data (tests)
+      GYM_TODAY     pin today's date, e.g. 2026-11-08 (tests, demos)
 """
 
 import os
@@ -29,15 +36,16 @@ from src.sidecar import (
     discard_corrections,
     keep_corrections,
     payments_path,
+    receive_upload,
     resolve_input,
-    save_upload,
+    working_copies,
     write_clean_members,
 )
 from src.validation import apply_fixes, fix_for, preview_fix, validate
 
 DATA_DIR = Path(__file__).resolve().parent.joinpath("data")  # upload working copies (git-ignored)
-PATH_MODE = "A file on this computer"
-UPLOAD_MODE = "Upload a file"
+OPEN_SHEET = "open_sheet"  # session key: the working copy the owner uploaded or reopened
+UPLOAD_NOTICE = "upload_notice"  # session key: shown once after opening it
 MANUAL = "enter_manually"
 # Presentation only: whether a row is Overdue is decided in src (row["is_overdue"]).
 DUE_STYLE = "background-color: #d93025; color: white; font-weight: bold"
@@ -64,30 +72,81 @@ def locked_message(exc: PermissionError) -> str:
             "Excel. Close it there, then press R to retry.")
 
 
-def default_sheet_path() -> str:
-    return os.environ.get("GYM_SHEET") or next(iter(sys.argv[1:]), "")
+def data_dir() -> Path:
+    return Path(os.environ.get("GYM_DATA_DIR") or DATA_DIR)
+
+
+def developer_sheet() -> str:
+    """GYM_SHEET, else the first CLI argument after `--`; empty for the owner's route."""
+    given = os.environ.get("GYM_SHEET") or next(iter(sys.argv[1:]), "")
+    return given.strip().strip('"')
 
 
 def choose_sheet() -> Path:
-    mode = st.radio("Where is the sheet?", (PATH_MODE, UPLOAD_MODE), horizontal=True, key="mode")
-    if mode == UPLOAD_MODE:
-        return uploaded_sheet()
-    typed = st.text_input("Sheet path", value=default_sheet_path(), key="sheet_path")
-    cleaned = typed.strip().strip('"')
-    if not cleaned:
-        st.info("Enter the path of the members sheet (CSV or Excel) to begin.")
-        st.stop()
-    return check_sheet(cleaned)
+    """The developer's path if one was given, else the sheet the owner opened, else upload."""
+    given = developer_sheet()
+    if given:
+        return check_sheet(given)
+    if OPEN_SHEET in st.session_state:
+        return opened_sheet(st.session_state[OPEN_SHEET])
+    upload_screen()
 
 
-def uploaded_sheet() -> Path:
-    upload = st.file_uploader("Members sheet", type=["csv", "xlsx"], key="upload")
-    if upload is None:
-        st.info("Upload the members sheet (CSV or Excel) to begin.")
-        st.stop()
-    path = save_upload(DATA_DIR, upload.name, upload.getvalue())
+def upload_screen():
+    st.subheader("Upload your members sheet")
+    st.write("Choose the members sheet your gym keeps, saved as CSV or Excel (.csv or .xlsx).")
+    # No `type=` filter: Streamlit would refuse other files with a traceback the
+    # app cannot catch; receive_upload refuses them with a sentence instead.
+    upload = st.file_uploader("Members sheet", key="upload")
+    st.caption("Your original file is never changed. The tool works on a copy it keeps "
+               "in its data folder, with your payments and corrections beside it.")
+    if upload is not None:
+        try:
+            saved = receive_upload(data_dir(), upload.name, upload.getvalue())
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            open_sheet(saved.path, upload_notice(saved))
+    earlier_uploads()
+    st.stop()
+
+
+def upload_notice(saved) -> str | None:
+    if not saved.kept_payments:
+        return None
+    if saved.changed:
+        return (f"{saved.path.name} replaces the copy uploaded before. The payments already "
+                "recorded for it were kept.")
+    return (f"{saved.path.name} is the same as the copy uploaded before. The payments already "
+            "recorded for it were kept.")
+
+
+def earlier_uploads() -> None:
+    copies = working_copies(data_dir())
+    if not copies:
+        return
+    st.subheader("Or reopen an earlier upload")
+    chosen = st.selectbox("Earlier uploads, most recently used first", copies,
+                          format_func=lambda p: p.name, key="earlier_upload")
+    if st.button("Open", key="open_working_copy"):
+        open_sheet(chosen, None)
+
+
+def open_sheet(path: Path, notice: str | None) -> None:
+    st.session_state[OPEN_SHEET] = path
+    st.session_state[UPLOAD_NOTICE] = notice
+    st.rerun()
+
+
+def opened_sheet(path: Path) -> Path:
+    notice = st.session_state.pop(UPLOAD_NOTICE, None)
+    if notice:
+        st.success(notice)
     st.caption(f"Working copy: {path}. Corrections and payments are saved beside it; "
                "your original file is never changed.")
+    if st.button("Open a different sheet", key="choose_another_sheet"):
+        del st.session_state[OPEN_SHEET]
+        st.rerun()
     return path
 
 
