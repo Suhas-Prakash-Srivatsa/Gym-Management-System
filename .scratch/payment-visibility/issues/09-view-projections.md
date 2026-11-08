@@ -1,6 +1,6 @@
 # View projections for tiles and table
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 03
 
 ## Goal
@@ -27,3 +27,7 @@ Shape derived data into exactly what the screen shows — as plain Python data, 
 - Exactly 11 rows carry the `DUE` tag.
 - `tiles` → 24 members, Total Receivable ₹97,300, Overdue ₹60,950.
 - `show_fully_paid=True` returns 26 rows with the 7 settled ones last.
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed. `src/views.py` provides `tiles` (Total Members, Total Membership Value, Total Receivable, Overdue; no "due this month"), `receivables_rows` (Outstanding > 0, Next Due Date ascending, stable sheet order on ties, `DUE` tag when Overdue; `show_fully_paid=True` appends settled rows tagged `Paid`) and re-exports `money.format_money`. Every projection is plain typed values plus a `display` dict keyed by on-screen label. No Streamlit, markup or clock. Book1 at 2026-11-08 gives 19 rows (MS-020 first, MS-022 last), 11 `DUE`, ₹97,300 receivable and ₹60,950 overdue.

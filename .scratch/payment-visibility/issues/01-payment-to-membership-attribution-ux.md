@@ -17,3 +17,4 @@ Deliberately **not** doing meanwhile: silent arbitrary attribution when a member
 ## Comments
 
 - 2026-11-08: Raised during the design grilling session. Blocks nothing in V1; revisit after user feedback.
+- 2026-11-08: Spec rule 4 restarts Next Due from the Last Payment Date, so any partial payment (even ₹100 on MS-020's ₹4,500) clears its `DUE` tag and takes its whole Outstanding off the Overdue tile for 2 months. Correct per spec, but a business question for gym owners: should a token payment reset the grace clock? Also, `default_membership` now prefers Memberships with Outstanding > 0 (see ticket 08 Decisions).
