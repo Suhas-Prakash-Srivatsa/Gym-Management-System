@@ -1,6 +1,6 @@
 # Sheet reader with header aliases
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 ## Goal
@@ -22,3 +22,7 @@ Read the owner's CSV/Excel into `RawRow`s — dicts of strings — without conve
 ## Tests
 
 `tests/test_sheet.py`: a sheet headed `name,joined,amount,...` normalises to canonical keys; a BOM-prefixed header still matches; `Book1_errors.csv` yields 6 rows with no exception; the yearless `1st June` arrives as the literal string.
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed.

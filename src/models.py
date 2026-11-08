@@ -12,6 +12,11 @@ from typing import Literal
 
 PaymentSource = Literal["opening", "recorded"]
 
+# One sheet row before the parsing boundary: canonical column -> untouched
+# string. Any field may be missing or malformed; only validation and assembly
+# turn it into the types below.
+RawRow = dict[str, str]
+
 
 class MembershipType(Enum):
     MONTHLY = "Monthly"
