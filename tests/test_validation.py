@@ -541,3 +541,9 @@ def test_other_options_have_no_preview():
     issue = check_dates(rows[0], 1)[0]
     assert preview_fix(rows, issue, "enter_manually", today=TODAY) is None
     assert preview_fix(rows, issue, None, today=TODAY) is None
+
+
+def test_sheet_level_messages_do_not_assume_an_upload():
+    issues = check_required_columns(["member_name", "member_name"])
+    assert issues and all("upload" not in i.message for i in issues)
+    assert all("reload" in i.message for i in issues)

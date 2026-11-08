@@ -66,6 +66,11 @@ def run_app(monkeypatch, sheet):
     return at
 
 
+def issue_tables(at):
+    """The validation-issues table(s): the dashboard also shows a table since ticket 11."""
+    return [d for d in at.dataframe if "Problem" in d.value.columns]
+
+
 def tiles_shown(at):
     return {m.label: m.value for m in at.metric}
 
@@ -130,7 +135,7 @@ def test_a_rerun_uses_the_corrections_and_asks_nothing(tmp_path, monkeypatch):
     before = fingerprint(sheet)
     at = run_app(monkeypatch, sheet)
     assert len(at.radio) == 1  # only the path/upload mode switch
-    assert not at.dataframe
+    assert not issue_tables(at)
     assert tiles_shown(at) == FIXED_TILES
     assert "members_clean.csv" in texts(at.info)
     assert fingerprint(sheet) == before
@@ -161,7 +166,7 @@ def test_book1_goes_straight_to_the_dashboard(tmp_path, monkeypatch):
     before = fingerprint(sheet)
     at = run_app(monkeypatch, sheet)
     assert tiles_shown(at) == BOOK1_TILES
-    assert not at.dataframe and not at.error
+    assert not issue_tables(at) and not at.error
     assert not (sheet.parent / "members_clean.csv").exists()
     assert fingerprint(sheet) == before
 
@@ -176,7 +181,7 @@ def test_a_missing_column_is_fatal_and_says_what_to_add(tmp_path, monkeypatch):
     at = run_app(monkeypatch, sheet)
     [table] = at.dataframe
     assert list(table.value["Problem"]) == [
-        "The sheet has no Membership Type column. Add it to the sheet and upload again."]
+        "The sheet has no Membership Type column. Add it to the sheet, save it and reload."]
     assert "column" in texts(at.error)
     assert tiles_shown(at) == {}
     assert not [b for b in at.button if b.key == "apply_fixes"]
@@ -194,7 +199,7 @@ def test_a_newer_sheet_than_its_corrections_asks_before_using_them(tmp_path, mon
     at.button(key="discard_corrections").click()
     at.run()
     assert len(at.dataframe[0].value) == 9  # back to the sheet's own issues
-    assert (sheet.parent / "members_clean.csv.bak").exists()
+    assert len(list(sheet.parent.glob("members_clean.csv.*.bak"))) == 1
 
 
 def test_keeping_corrections_after_a_sheet_change(tmp_path, monkeypatch):
@@ -266,7 +271,8 @@ def test_app_has_no_arithmetic_or_ordering_comparisons():
 def test_app_reads_the_clock_exactly_once():
     source = APP.read_text(encoding="utf-8")
     assert source.count("date.today()") == 1
-    assert "datetime.now" not in source
+    # Timestamps (backup names, later recorded_at) come from one clock read, never dates.
+    assert source.count("datetime.now()") <= 1
 
 
 def test_the_clock_is_read_nowhere_in_src():
@@ -285,3 +291,10 @@ def test_the_sheet_path_can_come_from_the_command_line(tmp_path, monkeypatch):
     assert not at.exception
     assert at.text_input(key="sheet_path").value == str(sheet)
     assert tiles_shown(at) == BOOK1_TILES
+
+
+def test_a_folder_path_is_called_a_folder_not_a_locked_file(tmp_path, monkeypatch):
+    at = run_app(monkeypatch, tmp_path)
+    assert "folder, not a sheet" in texts(at.error)
+    assert "open in another program" not in texts(at.error)
+    assert tiles_shown(at) == {}

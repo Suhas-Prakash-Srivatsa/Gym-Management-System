@@ -10,6 +10,7 @@ from src.ledger import COLUMNS, append_payment, read_payments
 from src.models import Payment
 from src.sheet import read_rows
 from src.sidecar import (
+    check_sheet,
     clean_members_path,
     corrections_stale,
     discard_corrections,
@@ -370,7 +371,13 @@ def test_an_upload_name_cannot_escape_the_data_folder(tmp_path):
     assert path.parent.parent == (tmp_path / "data").resolve()
 
 
-@pytest.mark.parametrize("name", ["payments.csv", "members_clean.csv", "", "   "])
+@pytest.mark.parametrize("name", [
+    "payments.csv", "members_clean.csv", "", "   ",
+    # Windows-invalid characters, reserved device names, trailing dot or space
+    "Book<1>.csv", "Book:1.csv", 'Bo"ok.csv', "Bo|ok.csv", "Book?.csv", "Bo*ok.csv",
+    "Bo\x00ok.csv", "Bo\x1fok.csv", "CON.csv", "nul.csv", "Com1.csv", "LPT9.xlsx", "aux",
+    "con.tar.gz", "Book1.csv.", "Book1.csv ", "Book1. ",
+])
 def test_an_upload_named_like_a_sidecar_or_nameless_is_refused(tmp_path, name):
     with pytest.raises(ValueError):
         save_upload(tmp_path / "data", name, b"a,b\n")
@@ -406,14 +413,30 @@ def test_corrections_are_stale_when_the_sheet_is_newer(sheet):
     assert corrections_stale(sheet) is True
 
 
-def test_discarding_corrections_falls_back_to_the_sheet_and_keeps_a_backup(sheet):
+STAMP = datetime(2026, 11, 8, 18, 30, 5)
+
+
+def test_discarding_corrections_falls_back_to_the_sheet_and_keeps_a_timestamped_backup(sheet):
     rows, _ = read_rows(sheet)
     write_clean_members(clean_members_path(sheet), rows[:1])
-    discard_corrections(sheet)
+    backup = discard_corrections(sheet, STAMP)
+    assert backup == sheet.parent / "members_clean.csv.20261108-183005.bak"
     assert resolve_input(sheet).used_clean_sidecar is False
-    backup = sheet.parent / "members_clean.csv.bak"
     assert read_rows(backup)[0] == rows[:1]
-    discard_corrections(sheet)  # nothing left to discard: no error
+    assert discard_corrections(sheet, STAMP) is None  # nothing left to discard: no error
+
+
+def test_a_second_discard_never_overwrites_the_first_backup(sheet):
+    rows, _ = read_rows(sheet)
+    write_clean_members(clean_members_path(sheet), rows[:1])
+    first = discard_corrections(sheet, STAMP)
+    write_clean_members(clean_members_path(sheet), rows[:2])
+    second = discard_corrections(sheet, STAMP)  # same second, even
+    later = (write_clean_members(clean_members_path(sheet), rows[:3]),
+             discard_corrections(sheet, datetime(2026, 11, 9, 9, 0)))[1]
+    assert len({first, second, later}) == 3
+    assert [len(read_rows(p)[0]) for p in (first, second, later)] == [1, 2, 3]
+    assert second.name == "members_clean.csv.20261108-183005-2.bak"
 
 
 def test_keeping_corrections_clears_the_stale_warning(sheet):
@@ -430,5 +453,26 @@ def test_stale_checks_and_discards_never_write_the_input(sheet):
     write_clean_members(clean_members_path(sheet), read_rows(sheet)[0])
     corrections_stale(sheet)
     keep_corrections(sheet)
-    discard_corrections(sheet)
+    discard_corrections(sheet, STAMP)
     assert (sheet.read_bytes(), os.stat(sheet).st_mtime_ns) == before
+
+
+@pytest.mark.parametrize("name", ["CONTACTS.csv", "console.csv", "Book1 (2).csv", "Ünal's gym.xlsx"])
+def test_ordinary_names_that_merely_resemble_reserved_ones_are_fine(tmp_path, name):
+    assert save_upload(tmp_path / "data", name, b"a,b\n").name == name
+
+
+def test_a_folder_is_not_a_sheet(tmp_path):
+    with pytest.raises(ValueError, match="folder, not a sheet"):
+        check_sheet(tmp_path)
+    with pytest.raises(ValueError, match="folder, not a sheet"):
+        resolve_input(tmp_path)
+
+
+def test_a_missing_sheet_is_a_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        check_sheet(tmp_path / "nope.csv")
+
+
+def test_an_existing_sheet_passes_the_check(sheet):
+    assert check_sheet(sheet) == sheet

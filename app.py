@@ -11,9 +11,10 @@ Env:  GYM_SHEET  default sheet path (instead of the CLI argument)
 
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from src import views
@@ -21,6 +22,7 @@ from src.assemble import build_dataset, with_ledger
 from src.balances import all_statuses
 from src.ledger import read_payments
 from src.sidecar import (
+    check_sheet,
     clean_members_path,
     corrections_stale,
     discard_corrections,
@@ -36,6 +38,8 @@ DATA_DIR = Path(__file__).resolve().parent.joinpath("data")  # upload working co
 PATH_MODE = "A file on this computer"
 UPLOAD_MODE = "Upload a file"
 MANUAL = "enter_manually"
+# Presentation only: whether a row is Overdue is decided in src (row["is_overdue"]).
+DUE_STYLE = "background-color: #d93025; color: white; font-weight: bold"
 
 # How each fix option reads on screen. Which options an issue offers is
 # decided in src/validation.py; this is wording only.
@@ -67,7 +71,7 @@ def choose_sheet() -> Path:
     if not cleaned:
         st.info("Enter the path of the members sheet (CSV or Excel) to begin.")
         st.stop()
-    return Path(cleaned)
+    return check_sheet(cleaned)
 
 
 def uploaded_sheet() -> Path:
@@ -87,7 +91,8 @@ def ask_about_stale_corrections(sheet: Path) -> None:
         "Using the corrections would hide anything new in the sheet.")
     keep, discard = st.columns(2)
     if discard.button("Discard my corrections and use the sheet", key="discard_corrections"):
-        discard_corrections(sheet)
+        backup = discard_corrections(sheet, datetime.now())  # the only timestamp clock read
+        st.toast(f"Corrections moved aside to {backup}.")
         st.rerun()
     if keep.button("Keep my corrections", key="keep_corrections"):
         keep_corrections(sheet)
@@ -104,7 +109,7 @@ def answer_widgets(issue, rows, today):
         return None
     choices = [o for o in issue.fix_options if o != MANUAL]
     option = (st.radio("Answer", issue.fix_options, index=None, key=f"{key}:option",
-                       format_func=OPTION_LABELS.get, horizontal=True)
+                       format_func=lambda o: OPTION_LABELS.get(o, o), horizontal=True)
               if choices else MANUAL)
     typed = (st.text_input("Correct value", key=f"{key}:value")
              if MANUAL in issue.fix_options else None)
@@ -120,7 +125,7 @@ def show_issues(report, rows, sheet: Path, today: date) -> None:
     st.dataframe([r["display"] for r in views.issue_rows(report.issues, rows)], hide_index=True)
     if report.is_fatal:
         st.error("These can only be fixed in the sheet itself: add or rename the column(s) "
-                 "named above, save, and load it again.")
+                 "named above, save the sheet and reload.")
         st.stop()
     st.subheader("Fix them here")
     fixes = [answer_widgets(issue, rows, today) for issue in report.issues]
@@ -136,9 +141,21 @@ def show_dashboard(rows, sheet: Path, today: date) -> None:
     merge = with_ledger(build_dataset(rows), read_payments(payments_path(sheet)))
     for warning in views.ledger_warnings(merge):
         st.warning(warning)
-    figures = views.tiles(all_statuses(merge.dataset, today))["display"]
+    statuses = all_statuses(merge.dataset, today)
+    figures = views.tiles(statuses)["display"]
     for column, (label, value) in zip(st.columns(len(figures)), figures.items()):
         column.metric(label, value)
+    show_paid = st.toggle("Show fully paid", value=False, key="show_fully_paid")
+    rows = views.receivables_rows(statuses, show_fully_paid=show_paid)
+    st.dataframe(receivables_table(rows), hide_index=True, width="stretch")
+
+
+def receivables_table(rows):
+    """The rows exactly as views ordered and formatted them, with the DUE tag styled red."""
+    table = pd.DataFrame([r["display"] for r in rows], columns=views.ROW_COLUMNS)
+    overdue = [r["is_overdue"] for r in rows]
+    return table.style.apply(lambda _: [DUE_STYLE if o else "" for o in overdue],
+                             subset=["Status"], axis=0)
 
 
 def main() -> None:
@@ -165,6 +182,9 @@ except PermissionError as exc:
              "Excel. Close it there, then press R to retry.")
 except FileNotFoundError as exc:
     st.error(f"There is no file at {exc.filename}. Check the path and try again.")
+except OSError as exc:
+    st.error(f"Could not use {exc.filename or 'a file'}: {exc.strerror or exc}. "
+             "Check the path and that no other program is using it.")
 except UnicodeDecodeError:
     st.error("The sheet is not a UTF-8 CSV. In Excel, save it as 'CSV UTF-8' or as .xlsx.")
 except (ValueError, ImportError) as exc:

@@ -55,6 +55,11 @@ def start(monkeypatch, sheet):
     return at
 
 
+def issue_tables(at):
+    """The validation-issues table(s): the dashboard also shows a table since ticket 11."""
+    return [d for d in at.dataframe if "Problem" in d.value.columns]
+
+
 def step(at):
     at.run()
     assert not at.exception, [e.value for e in at.exception]
@@ -94,7 +99,7 @@ def test_clean_sheet_goes_straight_to_tiles(monkeypatch, book1):
     before = fp(book1)
     at = start(monkeypatch, book1)
     assert {m.label: m.value for m in at.metric}["Total Receivable"] == "₹97,300"
-    assert not at.error and not at.dataframe and not at.info
+    assert not at.error and not issue_tables(at) and not at.info
     assert not clean_members_path(book1).exists()
     assert fp(book1) == before
 
@@ -150,7 +155,7 @@ def test_ticket_flow_then_rerun_asks_nothing_and_the_sheet_never_changes(monkeyp
     assert clean_members_path(errors_sheet).exists()
 
     again = start(monkeypatch, errors_sheet)  # a fresh session: a later run
-    assert again.metric and not again.dataframe
+    assert again.metric and not issue_tables(again)
     assert not [r for r in again.radio if r.key != "mode"] and not again.text_input(
         key="sheet_path").value == ""
     assert "corrected data" in " ".join(i.value for i in again.info)
@@ -186,7 +191,7 @@ def test_stale_corrections_block_until_answered(monkeypatch, errors_sheet):
     answer_everything(start(monkeypatch, errors_sheet))
     make_stale(errors_sheet)
     at = start(monkeypatch, errors_sheet)
-    assert not at.metric and not at.dataframe
+    assert not at.metric and not at.dataframe  # no table of any kind
     assert "changed since your corrections" in " ".join(w.value for w in at.warning)
 
 
@@ -212,7 +217,8 @@ def test_discard_keeps_a_backup_and_returns_to_the_sheet(monkeypatch, errors_she
     at.button(key="discard_corrections").click()
     step(at)
     assert not clean.exists()
-    assert clean.with_name("members_clean.csv.bak").read_bytes() == clean_bytes
+    [backup] = clean.parent.glob("members_clean.csv.*.bak")  # timestamped since ticket 11
+    assert backup.read_bytes() == clean_bytes
     assert not at.metric and len(at.dataframe[0].value) == 9
     assert fp(errors_sheet) == sheet_fp
 

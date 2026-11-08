@@ -142,6 +142,13 @@ def test_show_fully_paid_appends_the_seven_settled_rows_last(statuses):
     assert settled[0]["membership_id"] == "MS-009"  # Manoj, settled, due 2026-03-05
 
 
+def test_a_settled_row_shows_no_next_due_date(statuses):
+    # Typed value kept (it orders the rows); on screen a due date means nothing once paid.
+    settled = receivables_rows(statuses, show_fully_paid=True)[19:]
+    assert all(r["next_due_date"] is not None for r in settled)
+    assert {r["display"]["Next Due Date"] for r in settled} == {"—"}
+
+
 def test_member_name_is_the_display_name_never_the_normalised_key():
     member = Member("suhas prakash", "Suhas Prakash")
     ms = Membership("suhas prakash-01", "suhas prakash", MembershipType.MONTHLY,

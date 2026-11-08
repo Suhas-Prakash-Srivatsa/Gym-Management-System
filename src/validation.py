@@ -184,7 +184,7 @@ def check_required_columns(columns: list[str]) -> list[Issue]:
     """
     issues = [
         Issue(None, c, "missing_column",
-              f"The sheet has no {_label(c)} column. Add it to the sheet and upload again.")
+              f"The sheet has no {_label(c)} column. Add it to the sheet, save it and reload.")
         for c in REQUIRED_COLUMNS
         if c not in columns
     ]
@@ -194,7 +194,7 @@ def check_required_columns(columns: list[str]) -> list[Issue]:
             issues.append(Issue(
                 None, c, "ambiguous_column",
                 f"The sheet has more than one column meaning {_label(c)}. "
-                "Keep one, rename or remove the others, and upload again."))
+                "Keep one, rename or remove the others, save the sheet and reload."))
         seen.add(c)
     return issues
 

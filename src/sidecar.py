@@ -8,8 +8,10 @@ the input's folder; on later runs the cleaned sidecar takes precedence, and
 
 import csv
 import os
+import re
 from dataclasses import dataclass
-from pathlib import Path, PureWindowsPath
+from datetime import datetime
+from pathlib import Path
 
 from src.models import RawRow
 from src.sheet import HEADER_ALIASES, read_rows
@@ -93,8 +95,24 @@ class ResolvedInput:
     used_clean_sidecar: bool  # tell the owner they are seeing corrected data
 
 
+def check_sheet(input_path) -> Path:
+    """The sheet's path, if it names a file that exists.
+
+    FileNotFoundError when nothing is there; ValueError for a folder, which
+    Windows would otherwise report as a misleading "permission denied".
+    """
+    path = Path(input_path)
+    if path.is_dir():
+        raise ValueError(f"{path} is a folder, not a sheet. Enter the path of the CSV or "
+                         "Excel file itself.")
+    if not path.exists():
+        raise FileNotFoundError(2, "No such file", str(path))
+    return path
+
+
 def resolve_input(input_path) -> ResolvedInput:
     """Prefer `members_clean.csv` beside the input; otherwise read the sheet itself."""
+    check_sheet(input_path)
     clean_path = clean_members_path(input_path)
     if clean_path.exists():
         return ResolvedInput(*read_rows(clean_path), used_clean_sidecar=True)
@@ -104,6 +122,24 @@ def resolve_input(input_path) -> ResolvedInput:
 # --- Uploads and stale corrections ---
 
 BACKUP_SUFFIX = ".bak"
+_INVALID_NAME_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
+_RESERVED_STEMS = {"CON", "PRN", "AUX", "NUL",
+                   *(f"COM{n}" for n in range(1, 10)), *(f"LPT{n}" for n in range(1, 10))}
+
+
+def _check_upload_name(name: str) -> None:
+    """Refuse a name Windows cannot store as a file, with a reason the owner can act on."""
+    if name in ("", ".", "..") or not name.strip():
+        raise ValueError("The uploaded file has no usable name.")
+    if _INVALID_NAME_CHARS.search(name):
+        raise ValueError(f"The file name {name!r} contains a character Windows does not allow "
+                         '(< > : " | ? * or a control character). Rename it and upload again.')
+    if name.split(".")[0].strip().upper() in _RESERVED_STEMS:
+        raise ValueError(f"The file name {name!r} is reserved by Windows. Rename it and "
+                         "upload again.")
+    if name.endswith((".", " ")):
+        raise ValueError(f"The file name {name!r} ends with a dot or a space, which Windows "
+                         "does not allow. Rename it and upload again.")
 
 
 def save_upload(data_dir, filename: str, data: bytes) -> Path:
@@ -117,9 +153,8 @@ def save_upload(data_dir, filename: str, data: bytes) -> Path:
     any earlier corrections stale (`corrections_stale`) rather than silently
     mixing them with the new sheet. The owner's own file is never involved.
     """
-    name = PureWindowsPath(filename.strip()).name  # handles both / and \
-    if name in ("", ".", ".."):
-        raise ValueError("The uploaded file has no usable name.")
+    name = re.split(r"[\\/]", filename)[-1]  # base name only, whichever separator
+    _check_upload_name(name)
     _refuse_sidecar_name(Path(name))
     folder = Path(data_dir).resolve() / "_".join(filter(None, (Path(name).stem, Path(name).suffix[1:])))
     path = folder / name
@@ -142,11 +177,25 @@ def corrections_stale(input_path) -> bool:
     return clean.exists() and os.stat(input_path).st_mtime_ns > os.stat(clean).st_mtime_ns
 
 
-def discard_corrections(input_path) -> None:
-    """Stop using the cleaned sidecar; it is kept as `members_clean.csv.bak`, not deleted."""
+def discard_corrections(input_path, stamp: datetime) -> Path | None:
+    """Stop using the cleaned sidecar. It is moved aside, never deleted.
+
+    The backup is `members_clean.csv.<YYYYMMDD-HHMMSS>.bak`, from `stamp`
+    (the shell's clock; nothing here reads it), with `-2`, `-3`, ... added if
+    that name is taken, so a later discard never overwrites an earlier one.
+    Returns the backup's path, or None when there was nothing to discard.
+    """
     clean = clean_members_path(input_path)
-    if clean.exists():
-        os.replace(clean, clean.with_name(clean.name + BACKUP_SUFFIX))
+    if not clean.exists():
+        return None
+    base = f"{clean.name}.{stamp:%Y%m%d-%H%M%S}"
+    backup = clean.with_name(base + BACKUP_SUFFIX)
+    n = 1
+    while backup.exists():
+        n += 1
+        backup = clean.with_name(f"{base}-{n}{BACKUP_SUFFIX}")
+    os.replace(clean, backup)
+    return backup
 
 
 def keep_corrections(input_path) -> None:

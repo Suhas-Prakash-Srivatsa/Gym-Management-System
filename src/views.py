@@ -130,7 +130,8 @@ def _row(s: MembershipStatus) -> dict:
             format_money(s.paid),
             format_money(s.outstanding),
             _date_text(s.last_payment_on),
-            _date_text(s.next_due_on),
+            # Once settled nothing is due: the typed value still orders the rows.
+            NO_DATE if status == PAID_TAG else _date_text(s.next_due_on),
             status,
         ))),
     }
