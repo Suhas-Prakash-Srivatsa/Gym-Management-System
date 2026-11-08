@@ -1,6 +1,6 @@
 # Balance and overdue rules
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 ## Goal
@@ -28,3 +28,7 @@ Implement every money and timing rule from the spec (rules 1–5) as pure functi
 - Never-paid Membership anchors to `joined_on`: joined 2026-09-05, nothing paid → overdue on 2026-11-08, not overdue on 2026-11-05.
 - A Membership with two Payments anchors to the later one.
 - Outstanding for a never-paid Membership equals the full Contract Amount.
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed.
