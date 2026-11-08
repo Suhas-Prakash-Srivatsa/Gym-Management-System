@@ -1,6 +1,6 @@
 # Domain types, money and date primitives
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: —
 
 ## Goal
@@ -27,3 +27,7 @@ Establish the vocabulary as types, and the two primitives every money rule depen
 `tests/test_money.py`: `"₹12,000"`, `"12,000"`, `" 9500 "` all parse; negatives and `"abc"` rejected; repeated addition of parsed values stays exact.
 
 `tests/test_dates.py`: `2026-12-31 + 2 → 2027-02-28`; `2027-12-31 + 2 → 2028-02-29`; `2026-06-01 + 2 → 2026-08-01`; `"1st June"` → `None`; `2026-06-01`, `01/06/2026`, `1 June 2026` all parse to the same date.
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed.
