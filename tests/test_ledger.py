@@ -11,10 +11,14 @@ from src.models import Payment
 from src.sheet import read_rows
 from src.sidecar import (
     clean_members_path,
+    corrections_stale,
+    discard_corrections,
+    keep_corrections,
     payments_path,
     ResolvedInput,
     read_clean_members,
     resolve_input,
+    save_upload,
     write_clean_members,
 )
 from src.validation import Fix, apply_fixes, validate
@@ -340,3 +344,91 @@ def test_resolve_input_keeps_the_columns_validation_needs(tmp_path):
     assert resolved.columns == ["member_name", "member_name", "membership_type", "Notes"]
     codes = {i.code for i in validate(resolved.rows, resolved.columns).issues}
     assert "ambiguous_column" in codes and "missing_column" in codes
+
+
+# --- Upload working copies and stale corrections (ticket 10) ---
+
+
+def _age(path, seconds):
+    """Make `path` look `seconds` older than now, so mtime order is unambiguous."""
+    stamp = os.stat(path).st_mtime_ns - seconds * 1_000_000_000
+    os.utime(path, ns=(stamp, stamp))
+
+
+def test_an_upload_is_saved_as_a_working_copy_in_its_own_folder(tmp_path):
+    data = (FILES / "Book1.csv").read_bytes()
+    path = save_upload(tmp_path / "data", "Book1.csv", data)
+    assert path == (tmp_path / "data" / "Book1_csv" / "Book1.csv").resolve()
+    assert path.read_bytes() == data
+    assert payments_path(path).parent == path.parent  # sidecars sit beside the copy
+    other = save_upload(tmp_path / "data", "Book1.xlsx", b"x")
+    assert other.parent != path.parent  # different sheets never share a ledger
+
+
+def test_an_upload_name_cannot_escape_the_data_folder(tmp_path):
+    path = save_upload(tmp_path / "data", "..\\..\\evil/Book1.csv", b"a,b\n")
+    assert path.parent.parent == (tmp_path / "data").resolve()
+
+
+@pytest.mark.parametrize("name", ["payments.csv", "members_clean.csv", "", "   "])
+def test_an_upload_named_like_a_sidecar_or_nameless_is_refused(tmp_path, name):
+    with pytest.raises(ValueError):
+        save_upload(tmp_path / "data", name, b"a,b\n")
+    assert not (tmp_path / "data").exists() or not any((tmp_path / "data").rglob("*.csv"))
+
+
+def test_re_uploading_identical_bytes_does_not_touch_the_copy(tmp_path):
+    data = (FILES / "Book1.csv").read_bytes()
+    path = save_upload(tmp_path / "data", "Book1.csv", data)
+    _age(path, 60)
+    before = os.stat(path).st_mtime_ns
+    save_upload(tmp_path / "data", "Book1.csv", data)
+    assert os.stat(path).st_mtime_ns == before
+
+
+def test_re_uploading_different_bytes_makes_old_corrections_stale(tmp_path):
+    path = save_upload(tmp_path / "data", "Book1.csv", (FILES / "Book1.csv").read_bytes())
+    rows, _ = read_rows(path)
+    write_clean_members(clean_members_path(path), rows)
+    _age(path, 120)
+    _age(clean_members_path(path), 60)
+    assert corrections_stale(path) is False
+    save_upload(tmp_path / "data", "Book1.csv", (FILES / "Book1_errors.csv").read_bytes())
+    assert corrections_stale(path) is True
+
+
+def test_corrections_are_stale_when_the_sheet_is_newer(sheet):
+    assert corrections_stale(sheet) is False  # no corrections at all
+    write_clean_members(clean_members_path(sheet), read_rows(sheet)[0])
+    _age(sheet, 60)
+    assert corrections_stale(sheet) is False
+    _age(clean_members_path(sheet), 120)
+    assert corrections_stale(sheet) is True
+
+
+def test_discarding_corrections_falls_back_to_the_sheet_and_keeps_a_backup(sheet):
+    rows, _ = read_rows(sheet)
+    write_clean_members(clean_members_path(sheet), rows[:1])
+    discard_corrections(sheet)
+    assert resolve_input(sheet).used_clean_sidecar is False
+    backup = sheet.parent / "members_clean.csv.bak"
+    assert read_rows(backup)[0] == rows[:1]
+    discard_corrections(sheet)  # nothing left to discard: no error
+
+
+def test_keeping_corrections_clears_the_stale_warning(sheet):
+    write_clean_members(clean_members_path(sheet), read_rows(sheet)[0])
+    _age(clean_members_path(sheet), 120)
+    assert corrections_stale(sheet) is True
+    keep_corrections(sheet)
+    assert corrections_stale(sheet) is False
+    assert resolve_input(sheet).used_clean_sidecar is True
+
+
+def test_stale_checks_and_discards_never_write_the_input(sheet):
+    before = (sheet.read_bytes(), os.stat(sheet).st_mtime_ns)
+    write_clean_members(clean_members_path(sheet), read_rows(sheet)[0])
+    corrections_stale(sheet)
+    keep_corrections(sheet)
+    discard_corrections(sheet)
+    assert (sheet.read_bytes(), os.stat(sheet).st_mtime_ns) == before

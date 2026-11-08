@@ -9,7 +9,7 @@ the input's folder; on later runs the cleaned sidecar takes precedence, and
 import csv
 import os
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from src.models import RawRow
 from src.sheet import HEADER_ALIASES, read_rows
@@ -21,12 +21,16 @@ CLEAN_MEMBERS_NAME = "members_clean.csv"
 _CANONICAL = tuple(dict.fromkeys(HEADER_ALIASES.values()))
 
 
-def _beside(input_path, name: str) -> Path:
-    path = Path(input_path)
+def _refuse_sidecar_name(path: Path) -> None:
     if path.name.casefold() in (PAYMENTS_NAME, CLEAN_MEMBERS_NAME):
         raise ValueError(
             f"The input sheet is named {path.name!r}, the name of a sidecar file the tool "
             "writes; rename the sheet so it cannot be overwritten.")
+
+
+def _beside(input_path, name: str) -> Path:
+    path = Path(input_path)
+    _refuse_sidecar_name(path)
     return path.resolve().parent / name
 
 
@@ -95,3 +99,59 @@ def resolve_input(input_path) -> ResolvedInput:
     if clean_path.exists():
         return ResolvedInput(*read_rows(clean_path), used_clean_sidecar=True)
     return ResolvedInput(*read_rows(input_path), used_clean_sidecar=False)
+
+
+# --- Uploads and stale corrections ---
+
+BACKUP_SUFFIX = ".bak"
+
+
+def save_upload(data_dir, filename: str, data: bytes) -> Path:
+    """Keep an uploaded sheet as a working copy, so its sidecars have a folder to live in.
+
+    A browser upload has no path on disk, so the bytes are saved to
+    `<data_dir>/<stem>_<ext>/<filename>`: one folder per sheet name, so two
+    different sheets never share a Payment Ledger. Only the base name of
+    `filename` is used, so it cannot escape `data_dir`. Identical bytes leave
+    the copy untouched; different bytes replace it (atomically), which makes
+    any earlier corrections stale (`corrections_stale`) rather than silently
+    mixing them with the new sheet. The owner's own file is never involved.
+    """
+    name = PureWindowsPath(filename.strip()).name  # handles both / and \
+    if name in ("", ".", ".."):
+        raise ValueError("The uploaded file has no usable name.")
+    _refuse_sidecar_name(Path(name))
+    folder = Path(data_dir).resolve() / "_".join(filter(None, (Path(name).stem, Path(name).suffix[1:])))
+    path = folder / name
+    if path.exists() and path.read_bytes() == data:
+        return path
+    folder.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_bytes(data)
+    os.replace(temp, path)
+    return path
+
+
+def corrections_stale(input_path) -> bool:
+    """True when the sheet changed after its corrections were saved.
+
+    The cleaned sidecar would then hide whatever the owner added or changed
+    in the sheet since, so the shell must ask before using it.
+    """
+    clean = clean_members_path(input_path)
+    return clean.exists() and os.stat(input_path).st_mtime_ns > os.stat(clean).st_mtime_ns
+
+
+def discard_corrections(input_path) -> None:
+    """Stop using the cleaned sidecar; it is kept as `members_clean.csv.bak`, not deleted."""
+    clean = clean_members_path(input_path)
+    if clean.exists():
+        os.replace(clean, clean.with_name(clean.name + BACKUP_SUFFIX))
+
+
+def keep_corrections(input_path) -> None:
+    """The owner chose to keep the corrections despite a newer sheet: mark them current."""
+    clean = clean_members_path(input_path)
+    sheet_time = os.stat(input_path).st_mtime_ns
+    stamp = max(os.stat(clean).st_mtime_ns, sheet_time) + 1
+    os.utime(clean, ns=(stamp, stamp))

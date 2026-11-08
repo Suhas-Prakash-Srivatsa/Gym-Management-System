@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 src/files/payments.csv
 src/files/members_clean.csv
+data/

@@ -1,6 +1,6 @@
 # App: upload and in-dashboard validation fixing
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04, 05, 06, 07
 
 ## Goal
@@ -25,8 +25,12 @@ The upload and validation section of `app.py`, plus `write_clean_members` wired 
 
 Not unit-tested (Streamlit shell). Verified manually against both fixtures:
 
-- `Book1_errors.csv` → 6 rows surfaced, one per rule, no dashboard shown.
+- `Book1_errors.csv` → 9 issues surfaced across 6 rows (rows 1, 2 and 5 each break two rules), no dashboard shown.
 - Choosing *infer current year* for rows 1–2 and *two people* for Rakesh Sharma, then correcting the remaining fields, writes `members_clean.csv` and renders the dashboard.
 - Re-running picks the sidecar up and asks nothing.
 - `Book1.csv` → straight to the dashboard, no issues.
 - The original input file's modification time is unchanged after all of the above.
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed. `app.py` runs choose sheet → stale check → `resolve_input` → `validate`. Any blocking issue shows the issue table and fix controls built from `Issue.fix_options` (via `validation.fix_for` / `preview_fix`, nothing pre-applied), and no figures. Fatal issues explain what to add and stop. Fixes go through `apply_fixes` then `write_clean_members`. Decisions: **path mode is primary** (a file on this computer, so sidecars sit beside the real sheet). **Upload** saves a working copy to `data/<stem>_<ext>/` (git-ignored) via `sidecar.save_upload`, so the browser upload has a folder for its sidecars. **`GYM_TODAY`** overrides the clock (read once per run in the shell). **Stale corrections**: when the sheet is newer than `members_clean.csv` the owner must choose **Discard** (sidecar kept as `members_clean.csv.bak`) or **Keep** (sidecar re-stamped as current). `views.issue_rows` and `ledger_warnings` shape the issue table and the ledger notices.

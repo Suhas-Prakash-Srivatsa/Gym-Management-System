@@ -1,14 +1,24 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from src.assemble import build_dataset, with_ledger
+from src.assemble import LedgerMerge, build_dataset, with_ledger
 from src.balances import all_statuses
 from src.models import Dataset, Member, Membership, MembershipType, Payment
 from src.sheet import read_rows
-from src.views import ROW_COLUMNS, TILE_LABELS, format_money, receivables_rows, tiles
+from src.validation import Issue, validate
+from src.views import (
+    ISSUE_COLUMNS,
+    ROW_COLUMNS,
+    TILE_LABELS,
+    format_money,
+    issue_rows,
+    ledger_warnings,
+    receivables_rows,
+    tiles,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = date(2026, 11, 8)
@@ -150,8 +160,6 @@ def test_equal_next_due_dates_keep_sheet_order():
 
 
 def test_paise_are_shown_when_present(statuses):
-    from datetime import datetime
-
     member = Member("M1", "A")
     ms = Membership("MS-1", "M1", MembershipType.YEARLY, date(2026, 10, 1), Decimal("12000"), 2)
     paid = Payment("P-0001", "MS-1", Decimal("1000.50"), date(2026, 10, 2), "recorded",
@@ -171,3 +179,40 @@ def test_views_are_pure():
     source = (ROOT / "src" / "views.py").read_text(encoding="utf-8")
     for forbidden in ("streamlit", "today()", "now()", "open(", "<span", "<div", "html", "color", "colour", "float"):
         assert forbidden not in source
+
+
+# --- Issues and ledger problems, shaped for the screen ---
+
+
+
+def test_issue_rows_name_the_row_column_and_offending_value():
+    rows, columns = read_rows(ROOT / "src" / "files" / "Book1_errors.csv")
+    report = validate(rows, columns)
+    shown = issue_rows(report.issues, rows)
+    assert len(shown) == 9
+    first = next(r for r in shown if r["code"] == "date_missing_year")
+    assert first["display"] == {
+        "Row": "1", "Column": "Date Joined", "Value": "1st June",
+        "Problem": "Row 1: Date Joined '1st June' has no year.",
+    }
+    assert list(first["display"]) == list(ISSUE_COLUMNS)
+
+
+def test_sheet_level_issues_have_no_row_or_value():
+    issue = Issue(None, "membership_type", "missing_column", "The sheet has no Membership Type column.")
+    [shown] = issue_rows([issue], [])
+    assert shown["display"]["Row"] == "—" and shown["display"]["Value"] == ""
+    assert shown["display"]["Column"] == "Membership Type"
+
+
+def test_ledger_warnings_list_every_payment_left_out():
+    when = datetime(2026, 11, 1)
+    orphan = Payment("P-0003", "MS-999", Decimal("1500"), date(2026, 11, 1), "recorded", when)
+    clash = Payment("P-0001", "MS-001", Decimal("200.50"), date(2026, 11, 2), "recorded", when)
+    merge = LedgerMerge(Dataset((), (), ()), (orphan,), (clash,))
+    warnings = ledger_warnings(merge)
+    assert len(warnings) == 2
+    assert "P-0003" in warnings[0] and "MS-999" in warnings[0] and "₹1,500" in warnings[0]
+    assert "not counted" in warnings[0]
+    assert "P-0001" in warnings[1] and "₹200.50" in warnings[1] and "not counted" in warnings[1]
+    assert ledger_warnings(LedgerMerge(Dataset((), (), ()), (), ())) == []

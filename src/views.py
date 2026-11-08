@@ -18,10 +18,15 @@ from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
 
-from src.models import MembershipStatus
+from src.assemble import LedgerMerge
+from src.models import MembershipStatus, Payment, RawRow
 from src.money import format_money
+from src.validation import COLUMN_LABELS, Issue
 
-__all__ = ["ROW_COLUMNS", "TILE_LABELS", "format_money", "receivables_rows", "tiles"]
+__all__ = [
+    "ISSUE_COLUMNS", "ROW_COLUMNS", "TILE_LABELS", "format_money", "issue_rows",
+    "ledger_warnings", "receivables_rows", "tiles",
+]
 
 TILE_LABELS = ("Total Members", "Total Membership Value", "Total Receivable", "Overdue")
 
@@ -29,6 +34,8 @@ ROW_COLUMNS = (
     "Member Name", "Membership ID", "Membership Type", "Date Joined", "Contract Amount",
     "Paid", "Outstanding", "Last Payment Date", "Next Due Date", "Status",
 )
+
+ISSUE_COLUMNS = ("Row", "Column", "Value", "Problem")
 
 DUE_TAG = "DUE"  # Overdue: Next Due Date passed with money still owed
 PAID_TAG = "Paid"  # settled; only shown with show_fully_paid
@@ -127,3 +134,41 @@ def _row(s: MembershipStatus) -> dict:
             status,
         ))),
     }
+
+
+def issue_rows(issues: Iterable[Issue], rows: list[RawRow]) -> list[dict]:
+    """One row per Issue: its row number, the column's sheet label, the
+    offending value as typed, and the message. Sheet-level issues (a missing
+    column) have no row and no value."""
+    return [_issue_row(i, rows) for i in issues]
+
+
+def _issue_row(issue: Issue, rows: list[RawRow]) -> dict:
+    value = "" if issue.row_number is None else (rows[issue.row_number - 1].get(issue.column) or "")
+    label = COLUMN_LABELS.get(issue.column, issue.column)
+    return {
+        "row_number": issue.row_number,
+        "column": issue.column,
+        "code": issue.code,
+        "value": value,
+        "message": issue.message,
+        "display": dict(zip(ISSUE_COLUMNS, (
+            NO_DATE if issue.row_number is None else str(issue.row_number),
+            label,
+            value,
+            issue.message,
+        ))),
+    }
+
+
+def ledger_warnings(merge: LedgerMerge) -> list[str]:
+    """A sentence per ledger Payment that `with_ledger` left out. None of them is counted."""
+    return ([f"{_describe(p)} is for Membership {p.membership_id}, which is not in the sheet. "
+             "It is not counted." for p in merge.orphaned]
+            + [f"{_describe(p)} clashes with another record of payment {p.payment_id} "
+               "(or with the sheet's opening balance). It is not counted."
+               for p in merge.conflicting])
+
+
+def _describe(p: Payment) -> str:
+    return f"Payment {p.payment_id} ({format_money(p.amount)} on {p.paid_on.isoformat()})"

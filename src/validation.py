@@ -426,3 +426,49 @@ def _member_id_generator(rows: list[RawRow]):
                 return candidate
 
     return new_id
+
+
+# --- What the fix form needs, so the shell holds no rules ---
+
+
+def fix_for(issue: Issue, option: str | None, value: str | None = None) -> Fix | None:
+    """The Fix for the owner's answer to `issue`, or None while it is unanswered.
+
+    No option chosen, or `enter_manually` with nothing typed, is no answer:
+    nothing is ever applied by default. An option the issue does not offer
+    raises ValueError (a shell bug, not user error).
+    """
+    if option is None:
+        return None
+    if option not in issue.fix_options:
+        raise ValueError(f"{issue.code} does not offer {option!r}.")
+    if option != "enter_manually":
+        return Fix(issue.row_number, issue.column, option)
+    typed = (value or "").strip()
+    return Fix(issue.row_number, issue.column, option, typed) if typed else None
+
+
+@dataclass(frozen=True)
+class FixPreview:
+    message: str
+    warning: bool  # the owner should look twice before applying
+
+
+def preview_fix(rows: list[RawRow], issue: Issue, option: str | None, *, today) -> FixPreview | None:
+    """What a chosen fix will write, when that is not obvious from the choice.
+
+    Only `infer_current_year` has a preview: the completed date, flagged as a
+    warning when it lands after `today` (a "25 December" seen in November is
+    probably last year's).
+    """
+    if option != "infer_current_year":
+        return None
+    raw = _value(rows[issue.row_number - 1], issue.column)
+    completed = _with_year(raw, today.year)
+    if completed is None:
+        return FixPreview(f"'{raw}' has no day and month to add a year to.", warning=True)
+    if parse_date(completed) > today:
+        return FixPreview(
+            f"Becomes {completed}, which is in the future (today is {today.isoformat()}). "
+            "If that is wrong, type the real date instead.", warning=True)
+    return FixPreview(f"Becomes {completed}.", warning=False)

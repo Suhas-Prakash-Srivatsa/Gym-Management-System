@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from src.sheet import read_rows
 from src.validation import (
     Fix,
+    FixPreview,
     Issue,
     Report,
     apply_fixes,
@@ -17,7 +19,9 @@ from src.validation import (
     check_membership_type,
     check_member_name,
     check_required_columns,
+    fix_for,
     is_blank_row,
+    preview_fix,
     validate,
 )
 
@@ -488,3 +492,52 @@ def test_a_report_with_only_warnings_is_still_clean():
     error = Issue(1, "member_name", "missing_member_name", "Row 1: Member Name is empty.")
     assert Report((warning,), is_fatal=False).is_clean
     assert not Report((warning, error), is_fatal=False).is_clean
+
+
+# --- Helpers the app's fix form calls, so app.py holds no rules ---
+
+TODAY = date(2026, 11, 8)
+
+
+def test_fix_for_turns_an_answer_into_a_fix():
+    issue = Issue(3, "instalments", "invalid_instalments", "…", ("enter_manually",))
+    assert fix_for(issue, "enter_manually", " 2 ") == Fix(3, "instalments", "enter_manually", "2")
+    choice = Issue(1, "date_joined", "date_missing_year", "…",
+                   ("infer_current_year", "enter_manually"))
+    assert fix_for(choice, "infer_current_year", None) == Fix(1, "date_joined", "infer_current_year")
+
+
+@pytest.mark.parametrize("option, value", [(None, None), (None, "x"),
+                                           ("enter_manually", ""), ("enter_manually", "   "),
+                                           ("enter_manually", None)])
+def test_an_unanswered_question_is_no_fix(option, value):
+    issue = Issue(1, "date_joined", "date_missing_year", "…", ("infer_current_year", "enter_manually"))
+    assert fix_for(issue, option, value) is None
+
+
+def test_fix_for_refuses_an_option_the_issue_does_not_offer():
+    issue = Issue(1, "date_joined", "date_missing_year", "…", ("infer_current_year", "enter_manually"))
+    with pytest.raises(ValueError):
+        fix_for(issue, "same_person", None)
+
+
+def test_preview_shows_what_infer_current_year_will_write():
+    rows = [row(date_joined="1st June")]
+    issue = check_dates(rows[0], 1)[0]
+    assert preview_fix(rows, issue, "infer_current_year", today=TODAY) == FixPreview(
+        "Becomes 2026-06-01.", warning=False)
+
+
+def test_preview_warns_when_the_inferred_date_is_in_the_future():
+    rows = [row(), row(date_joined="25 December")]
+    issue = check_dates(rows[1], 2)[0]
+    preview = preview_fix(rows, issue, "infer_current_year", today=TODAY)
+    assert preview.warning is True
+    assert "2026-12-25" in preview.message and "future" in preview.message
+
+
+def test_other_options_have_no_preview():
+    rows = [row(date_joined="1st June")]
+    issue = check_dates(rows[0], 1)[0]
+    assert preview_fix(rows, issue, "enter_manually", today=TODAY) is None
+    assert preview_fix(rows, issue, None, today=TODAY) is None
