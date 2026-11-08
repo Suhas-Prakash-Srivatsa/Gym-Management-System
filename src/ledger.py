@@ -11,7 +11,12 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from src.identity import next_payment_id
 from src.models import Payment
+
+# next_payment_id lives in identity.py (pure core, beside the other ID rules);
+# re-exported so `from src.ledger import next_payment_id` keeps working.
+__all__ = ["COLUMNS", "read_payments", "append_payment", "next_payment_id"]
 
 COLUMNS = ("payment_id", "membership_id", "amount", "paid_on", "source", "recorded_at")
 
@@ -117,22 +122,3 @@ def _ends_with_newline(path: Path) -> bool:
     with path.open("rb") as f:
         f.seek(-1, 2)
         return f.read(1) in (b"\n", b"\r")
-
-
-_RECORDED_ID = re.compile(r"P-([0-9]+)")
-
-
-def next_payment_id(existing) -> str:
-    """The id for the next recorded Payment: `P-NNNN`, one above the highest P- number.
-
-    Based on the maximum rather than the count, so gaps or hand-deleted rows
-    cannot make it reuse an id.
-
-    Pass the RAW ledger, i.e. `read_payments(path)`, never
-    `with_ledger(...).dataset.payments`: the merged dataset leaves out
-    orphaned and conflicting rows, whose ids are still taken in the file. Opening Payments use `OPEN-<membership_id>`,
-    a disjoint namespace, so the two can never collide.
-    """
-    numbers = [int(m.group(1)) for p in existing
-               if (m := _RECORDED_ID.fullmatch(p.payment_id))]
-    return f"P-{max(numbers, default=0) + 1:04d}"

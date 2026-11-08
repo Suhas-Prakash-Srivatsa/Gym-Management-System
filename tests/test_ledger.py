@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from src.ledger import COLUMNS, append_payment, next_payment_id, read_payments
+from src.identity import next_payment_id
+from src.ledger import COLUMNS, append_payment, read_payments
 from src.models import Payment
 from src.sheet import read_rows
 from src.sidecar import (
@@ -124,6 +125,12 @@ def test_unreadable_ledger_row_raises_naming_the_line(tmp_path, bad):
 
 def _ids(*ids):
     return [payment(payment_id=i) for i in ids]
+
+
+def test_ledger_still_exports_next_payment_id():
+    import src.ledger
+
+    assert src.ledger.next_payment_id is next_payment_id
 
 
 def test_first_payment_id():

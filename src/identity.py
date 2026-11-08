@@ -3,10 +3,15 @@
 The one place the identity scheme lives. Validation uses it to find rows that
 would collide; assembly uses it to name what it builds. Both must agree
 exactly, or a sheet could validate clean and still assemble two Memberships
-under one ID. Depends only on models, so neither caller creates a cycle.
+under one ID. Payment ids live here too: `OPEN-<membership_id>` for Opening Balances and
+`P-NNNN` for recorded money, two disjoint namespaces. Depends only on models,
+so no caller creates a cycle.
 """
 
-from src.models import RawRow
+import re
+from collections.abc import Iterable
+
+from src.models import Payment, RawRow
 
 
 def _value(row: RawRow, column: str) -> str:
@@ -48,3 +53,27 @@ def effective_membership_ids(rows: list[RawRow]) -> list[str | None]:
         seen[key] = seen.get(key, 0) + 1
         ids.append(_value(row, "membership_id") or generate_membership_id(key, seen[key]))
     return ids
+
+
+def opening_payment_id(membership_id: str) -> str:
+    """The Opening Balance Payment's id: deterministic, so re-imports produce the same one."""
+    return f"OPEN-{membership_id}"
+
+
+_RECORDED_ID = re.compile(r"P-([0-9]+)")
+
+
+def next_payment_id(existing: Iterable[Payment]) -> str:
+    """The id for the next recorded Payment: `P-NNNN`, one above the highest P- number.
+
+    Based on the maximum rather than the count, so gaps or hand-deleted rows
+    cannot make it reuse an id. Opening Payments use `OPEN-<membership_id>`,
+    a disjoint namespace, so the two can never collide.
+
+    Pass the RAW ledger, i.e. `read_payments(path)`, never
+    `with_ledger(...).dataset.payments`: the merged dataset leaves out
+    orphaned and conflicting rows, whose ids are still taken in the file.
+    """
+    numbers = [int(m.group(1)) for p in existing
+               if (m := _RECORDED_ID.fullmatch(p.payment_id))]
+    return f"P-{max(numbers, default=0) + 1:04d}"

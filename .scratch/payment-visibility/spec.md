@@ -23,7 +23,7 @@ Vocabulary used below is defined in `/GLOSSARY.md` and is binding.
 4. **Next Due Date** = Last Payment Date + 2 whole calendar months; for a Membership with no Payments, Date Joined + 2 months. The Grace Period is fixed at 2 months in V1, with no per-Membership or per-gym override.
 5. A Membership is **Overdue** when `today > Next Due Date` **and** `Outstanding Balance > 0`. Both clauses are required: owing money inside the grace window is not Overdue.
 6. A Payment that would take Outstanding Balance below zero is **rejected**. Overpayment, credit notes and refunds are out of scope.
-7. Every Payment is attributed to exactly one Membership. Attribution is automatic when the Member holds one Membership, and an explicit choice when they hold more than one (default: earliest Next Due Date). See issue `01`.
+7. Every Payment is attributed to exactly one Membership. Attribution is automatic when the Member holds one Membership, and an explicit choice when they hold more than one (default: the earliest Next Due Date among Memberships with Outstanding Balance > 0, else the earliest overall). See issue `01`.
 8. Payments are immutable and append-only. Nothing in the system edits or deletes a Payment.
 
 ## Data in
@@ -93,4 +93,4 @@ All logic lives in pure functions under `src/`. `app.py` performs no arithmetic 
 
 ## Done when
 
-An owner can clone the repo, run one command, upload `src/files/Book1.csv`, see 4 correct tiles and a 19-row receivables table with 11 `DUE` tags, record a payment against Suhas Prakash's second Membership, and see Total Receivable fall by that amount — with their original spreadsheet unmodified.
+An owner can clone the repo, run one command, upload `src/files/Book1.csv`, see 4 correct tiles and a 19-row receivables table with 11 `DUE` tags, record a payment against Suhas Prakash's MS-001 (up to its ₹6,000 outstanding; his second Membership, MS-025, is fully paid and accepts nothing), and see Total Receivable fall by that amount — with their original spreadsheet unmodified.

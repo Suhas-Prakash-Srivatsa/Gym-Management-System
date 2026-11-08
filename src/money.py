@@ -3,6 +3,8 @@
 import re
 from decimal import ROUND_HALF_UP, Decimal
 
+# \d deliberately accepts any Unicode decimal digit ("١٢"): Decimal parses them
+# correctly and every amount is written back in ASCII digits.
 _NUMBER = re.compile(r"\d+(\.\d+)?")
 _TWO_PLACES = Decimal("0.01")
 
@@ -23,3 +25,20 @@ def parse_money(raw: str) -> Decimal:
 def quantize(d: Decimal) -> Decimal:
     """Round to two decimal places, half up."""
     return d.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+
+
+def format_money(d: Decimal) -> str:
+    """Render rupees the Indian way: `₹97,300`, `₹2,35,400`, `₹1,23,45,678.90`.
+
+    Rounded half up to the paisa; paise shown only when there are any. Indian
+    grouping: the last three digits, then pairs (thousand, lakh, crore). The
+    one formatter, shared by recording messages and the dashboard views.
+    """
+    rupees, paise = f"{quantize(d):.2f}".split(".")
+    sign, digits = ("-", rupees[1:]) if rupees.startswith("-") else ("", rupees)
+    head, tail = digits[:-3], digits[-3:]
+    pairs = []
+    while head:
+        head, pairs = head[:-2], [head[-2:], *pairs]
+    grouped = ",".join([*pairs, tail])
+    return f"{sign}₹{grouped}" + ("" if paise == "00" else f".{paise}")

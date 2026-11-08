@@ -13,6 +13,7 @@ from src.identity import (
     effective_membership_ids,
     generate_membership_id,
     member_key,
+    opening_payment_id,
 )
 from src.models import Dataset, Member, Membership, MembershipType, Payment, RawRow
 from src.money import parse_money
@@ -45,7 +46,7 @@ def opening_payment(membership: Membership, row: RawRow) -> Payment | None:
         return None
     paid_on = parse_date(_value(row, "last_payment_date"))
     return Payment(
-        payment_id=f"OPEN-{membership.membership_id}",
+        payment_id=opening_payment_id(membership.membership_id),
         membership_id=membership.membership_id,
         amount=amount,
         paid_on=paid_on,

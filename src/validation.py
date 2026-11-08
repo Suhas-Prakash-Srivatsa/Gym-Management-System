@@ -10,6 +10,7 @@ i.e. the first member row is row 1.
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Literal
 
 from src.dates import parse_date
 from src.identity import effective_membership_ids, is_blank_row
@@ -42,6 +43,13 @@ class Issue:
     # Every row the issue spans, when it spans more than `row_number` alone
     # (a duplicate name); the answer applies to all of them at once.
     related_rows: tuple[int, ...] = ()
+    # "error" blocks the action; "warning" is shown but lets it proceed (a
+    # future payment date). Sheet rules only ever raise errors.
+    severity: Literal["error", "warning"] = "error"
+
+    @property
+    def blocking(self) -> bool:
+        return self.severity == "error"
 
 
 def _value(row: RawRow, column: str) -> str:
@@ -289,8 +297,12 @@ class Report:
 
     @property
     def is_clean(self) -> bool:
-        """Only a clean report may be turned into a dashboard."""
-        return not self.issues
+        """Only a clean report may be turned into a dashboard.
+
+        Clean means no blocking issue; warnings are shown but do not hide the
+        dashboard. Every current sheet rule is an error.
+        """
+        return not any(i.blocking for i in self.issues)
 
 
 def validate(rows: list[RawRow], columns: list[str]) -> Report:

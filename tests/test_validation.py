@@ -5,6 +5,8 @@ import pytest
 from src.sheet import read_rows
 from src.validation import (
     Fix,
+    Issue,
+    Report,
     apply_fixes,
     check_amounts,
     check_dates,
@@ -479,3 +481,10 @@ def test_entering_a_new_membership_id_resolves_the_duplicate():
     issue = check_duplicate_membership_ids(rows)[0]
     fixed = apply_fixes(rows, [Fix(issue.row_number, issue.column, "enter_manually", "MS-7")])
     assert validate(fixed, list(row())).is_clean
+
+
+def test_a_report_with_only_warnings_is_still_clean():
+    warning = Issue(1, "paid_on", "some_warning", "Look again.", severity="warning")
+    error = Issue(1, "member_name", "missing_member_name", "Row 1: Member Name is empty.")
+    assert Report((warning,), is_fatal=False).is_clean
+    assert not Report((warning, error), is_fatal=False).is_clean
