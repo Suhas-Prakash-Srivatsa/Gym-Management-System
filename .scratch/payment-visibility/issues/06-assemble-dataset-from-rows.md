@@ -1,6 +1,6 @@
 # Assemble the dataset from validated rows
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 04, 05
 
 ## Goal
@@ -29,3 +29,7 @@ Cross the boundary once: validated `RawRow`s in, domain objects out. After this 
 - The four rows with `Paid Amount` 0 (MS-007, MS-011, MS-015, MS-022) produce no Payment at all.
 - 22 Opening Balance Payments are produced, each dated from its row's `Last Payment Date`.
 - A sheet with no `Membership ID` column generates `-01`/`-02` suffixes per member.
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed. Book1.csv assembles into 24 Members, 26 Memberships and 22 Opening Balance Payments (none for the four ₹0 rows); missing Membership IDs are generated as `<member_key>-NN` per Member in sheet order.
