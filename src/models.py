@@ -27,6 +27,21 @@ class MembershipType(Enum):
     def months(self) -> int:
         return _MONTHS[self]
 
+    @classmethod
+    def parse(cls, raw: str) -> "MembershipType | None":
+        """The type a sheet cell names, or None if it names none.
+
+        Case-insensitive; spaces, hyphens and underscores are interchangeable
+        ("half_yearly", "Half Yearly" -> HALF_YEARLY). The one mapping shared
+        by validation and assembly.
+        """
+        key = _type_key(raw)
+        return next((t for t in cls if _type_key(t.value) == key), None)
+
+
+def _type_key(raw: str) -> str:
+    return " ".join(raw.casefold().replace("-", " ").replace("_", " ").split())
+
 
 _MONTHS = {
     MembershipType.MONTHLY: 1,

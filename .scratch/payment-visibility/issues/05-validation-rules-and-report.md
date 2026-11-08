@@ -1,6 +1,6 @@
 # Validation rules and report
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02, 04
 
 ## Goal
@@ -31,3 +31,7 @@ Turn bad input into specific, answerable questions — one per row, naming the c
 - Vinod Bhatt: `Quarterly` → unrecognised membership type
 - A clean `Book1.csv` produces an empty, non-fatal report
 - `apply_fixes` with `infer_current_year` leaves the input rows unmutated and returns corrected copies
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed. Book1_errors.csv yields 9 issues (Vandana and Rakesh rows each hit two rules).

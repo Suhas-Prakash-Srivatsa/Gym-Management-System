@@ -50,3 +50,26 @@ def test_membership_is_immutable():
 def test_membership_stores_no_derived_money_or_dates():
     names = {f.name for f in dataclasses.fields(Membership)}
     assert names.isdisjoint({"paid_amount", "pending_amount", "next_payment_date"})
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("Yearly", MembershipType.YEARLY),
+        ("yearly", MembershipType.YEARLY),
+        (" YEARLY ", MembershipType.YEARLY),
+        ("Monthly", MembershipType.MONTHLY),
+        ("Half-Yearly", MembershipType.HALF_YEARLY),
+        ("Half Yearly", MembershipType.HALF_YEARLY),
+        ("half-yearly", MembershipType.HALF_YEARLY),
+        ("half_yearly", MembershipType.HALF_YEARLY),
+        ("HALF  YEARLY", MembershipType.HALF_YEARLY),
+    ],
+)
+def test_membership_type_parse_tolerates_case_and_separators(raw, expected):
+    assert MembershipType.parse(raw) is expected
+
+
+@pytest.mark.parametrize("raw", ["Quarterly", "", "Annual", "Halfyearly", "year"])
+def test_membership_type_parse_rejects_unknown_types(raw):
+    assert MembershipType.parse(raw) is None
