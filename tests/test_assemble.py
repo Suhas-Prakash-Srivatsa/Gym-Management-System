@@ -4,8 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from src.assemble import build_dataset, generate_membership_id, member_key, opening_payment
-from src.models import Member, Membership, MembershipType
+from src.assemble import (
+    LedgerMerge,
+    build_dataset,
+    generate_membership_id,
+    member_key,
+    opening_payment,
+    with_ledger,
+)
+from src.models import Member, Membership, MembershipType, Payment
 from src.sheet import read_rows
 
 FILES = Path(__file__).resolve().parent.parent / "src" / "files"
@@ -220,3 +227,83 @@ def test_validation_and_assembly_share_one_effective_id_scheme():
     assert effective_membership_ids(rows) == ["M001-01", None, "MS-5", "M001-03"]
     assert [ms.membership_id for ms in build_dataset(rows).memberships] == [
         "M001-01", "MS-5", "M001-03"]
+
+
+# --- Merging the Payment Ledger into the sheet's Dataset ---
+
+
+def recorded(payment_id, membership_id="MS-001", amount="1000", paid_on=date(2026, 11, 1)):
+    return Payment(payment_id, membership_id, Decimal(amount), paid_on, "recorded",
+                   datetime(2026, 11, 1, 9, 0))
+
+
+def _sheet():
+    return build_dataset([row(), row(member_id="M002", member_name="Vandana Rao",
+                                     membership_id="MS-002", paid_amount="0",
+                                     last_payment_date="")])
+
+
+def test_recorded_payments_join_the_opening_balances():
+    dataset = _sheet()
+    merge = with_ledger(dataset, [recorded("P-0001"), recorded("P-0002", "MS-002", "500")])
+    assert isinstance(merge, LedgerMerge)
+    assert [p.payment_id for p in merge.dataset.payments] == ["OPEN-MS-001", "P-0001", "P-0002"]
+    assert merge.dataset.members == dataset.members
+    assert merge.dataset.memberships == dataset.memberships
+    assert merge.orphaned == () and merge.conflicting == ()
+
+
+def test_an_empty_ledger_leaves_the_dataset_unchanged():
+    dataset = _sheet()
+    assert with_ledger(dataset, []) == LedgerMerge(dataset, (), ())
+
+
+def test_a_stray_copy_of_an_opening_payment_is_not_counted_twice():
+    dataset = _sheet()
+    [opening] = dataset.payments
+    merge = with_ledger(dataset, [opening, recorded("P-0001"), recorded("P-0001")])
+    assert [p.payment_id for p in merge.dataset.payments] == ["OPEN-MS-001", "P-0001"]
+    assert merge.conflicting == ()
+
+
+def test_the_sheet_wins_over_a_differing_opening_payment_in_the_ledger():
+    # The sheet is the one source for pre-tool money: a ledger copy that
+    # disagrees with it is reported, never counted.
+    dataset = _sheet()
+    [opening] = dataset.payments
+    stale = Payment(opening.payment_id, "MS-001", Decimal("9000"), opening.paid_on,
+                    "opening", opening.recorded_at)
+    unknown_opening = Payment("OPEN-MS-002", "MS-002", Decimal("100"), date(2026, 1, 1),
+                              "opening", datetime(2026, 1, 1))
+    merge = with_ledger(dataset, [stale, unknown_opening])
+    assert merge.dataset.payments == (opening,)
+    assert merge.conflicting == (stale, unknown_opening)
+
+
+def test_reused_recorded_payment_id_with_different_content_is_reported_not_counted():
+    first, clash = recorded("P-0001"), recorded("P-0001", amount="2500")
+    merge = with_ledger(_sheet(), [first, clash])
+    assert [p for p in merge.dataset.payments if p.source == "recorded"] == [first]
+    assert merge.conflicting == (clash,)
+
+
+def test_ledger_payments_for_unknown_memberships_are_reported_not_counted_and_never_crash():
+    from src.balances import all_statuses
+
+    ghost, wrong_case = recorded("P-0001", "MS-999"), recorded("P-0002", "ms-001")
+    merge = with_ledger(_sheet(), [ghost, wrong_case, recorded("P-0003")])
+    assert merge.orphaned == (ghost, wrong_case)  # IDs match exactly, case included
+    assert [p.payment_id for p in merge.dataset.payments] == ["OPEN-MS-001", "P-0003"]
+    statuses = all_statuses(merge.dataset, date(2026, 11, 8))
+    assert {s.membership.membership_id: s.paid for s in statuses} == {
+        "MS-001": Decimal("7000"), "MS-002": Decimal("0")}
+
+
+def test_golden_book1_with_an_empty_ledger(tmp_path):
+    from src.balances import all_statuses
+    from src.ledger import read_payments
+
+    rows, _ = read_rows(FILES / "Book1.csv")
+    merge = with_ledger(build_dataset(rows), read_payments(tmp_path / "payments.csv"))
+    owing = [s for s in all_statuses(merge.dataset, date(2026, 11, 8)) if s.outstanding > 0]
+    assert len(owing) == 19 and sum(s.outstanding for s in owing) == Decimal("97300")

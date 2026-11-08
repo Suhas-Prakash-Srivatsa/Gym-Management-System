@@ -5,6 +5,7 @@ guards nothing. What comes out is a Dataset whose objects downstream code can
 trust without a single check.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, time
 
 from src.dates import parse_date
@@ -18,7 +19,10 @@ from src.money import parse_money
 
 # member_key and generate_membership_id live in identity.py (shared with
 # validation) and are re-exported here as part of assembly's interface.
-__all__ = ["member_key", "generate_membership_id", "opening_payment", "build_dataset"]
+__all__ = [
+    "member_key", "generate_membership_id", "opening_payment", "build_dataset",
+    "LedgerMerge", "with_ledger",
+]
 
 
 def _value(row: RawRow, column: str) -> str:
@@ -81,3 +85,51 @@ def build_dataset(rows: list[RawRow]) -> Dataset:
         if payment is not None:
             payments.append(payment)
     return Dataset(tuple(members.values()), tuple(memberships), tuple(payments))
+
+
+@dataclass(frozen=True)
+class LedgerMerge:
+    """The sheet's Dataset with the ledger's Payments added, plus what was left out.
+
+    Left-out Payments are returned, never silently dropped, so the shell can
+    tell the owner. `dataset` itself stays orphan-free.
+    """
+
+    dataset: Dataset
+    orphaned: tuple[Payment, ...]  # name a Membership ID the sheet does not have
+    conflicting: tuple[Payment, ...]  # reuse a payment_id with different content
+
+
+def with_ledger(dataset: Dataset, ledger_payments) -> LedgerMerge:
+    """Add the Payment Ledger to a Dataset built from the sheet (pure).
+
+    - An exact copy of a Payment already present (same payment_id, same
+      fields) is the same fact twice and is dropped: deterministic
+      `OPEN-<membership_id>` ids mean a stray opening copy cannot double-count.
+    - A Payment whose payment_id is already taken by different content, or an
+      opening Payment the sheet did not produce, is `conflicting`: the sheet
+      is the one source of pre-tool money, and of two clashing records
+      neither can be trusted to replace the other.
+    - A Payment whose membership_id matches no Membership exactly (case
+      included) is `orphaned`.
+
+    Left-out Payments are reported rather than raised: one stale row (say,
+    after a Membership ID was corrected) must not block the whole dashboard,
+    yet counting it would put money against a contract that does not exist.
+    """
+    membership_ids = {m.membership_id for m in dataset.memberships}
+    kept = {p.payment_id: p for p in dataset.payments}
+    orphaned: list[Payment] = []
+    conflicting: list[Payment] = []
+    for payment in ledger_payments:
+        if payment.membership_id not in membership_ids:
+            orphaned.append(payment)
+        elif payment.payment_id in kept:
+            if kept[payment.payment_id] != payment:
+                conflicting.append(payment)
+        elif payment.source == "opening":
+            conflicting.append(payment)
+        else:
+            kept[payment.payment_id] = payment
+    merged = Dataset(dataset.members, dataset.memberships, tuple(kept.values()))
+    return LedgerMerge(merged, tuple(orphaned), tuple(conflicting))

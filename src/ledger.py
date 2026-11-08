@@ -1,0 +1,138 @@
+"""The Payment Ledger on disk (shell): `payments.csv`, append-only.
+
+Payments are only ever appended: the file is opened in mode "a", which
+cannot touch bytes already written, so a crash mid-write can at worst leave
+one partial last row, never lose history. Nothing here rewrites the file.
+"""
+
+import csv
+import re
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from src.models import Payment
+
+COLUMNS = ("payment_id", "membership_id", "amount", "paid_on", "source", "recorded_at")
+
+
+def read_payments(path) -> list[Payment]:
+    """Every Payment in the ledger, in file order; [] when the file does not exist yet.
+
+    Accepts both sources (`opening`, `recorded`). Columns are matched by name,
+    so a reordered file still reads. Amounts are parsed straight to Decimal
+    from their text, never via float, and must be plain positive rupees
+    (see `_amount`). A row that cannot be read raises ValueError naming its line: the ledger is the tool's own file, so
+    a bad row means it was edited by hand and must not be guessed at.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    # utf-8-sig: Excel adds a BOM when it re-saves the file.
+    with path.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        missing = set(COLUMNS) - set(reader.fieldnames or ())
+        if missing:
+            raise ValueError(f"{path.name}: missing column(s) {', '.join(sorted(missing))}.")
+        return [_payment(record, path, reader.line_num) for record in reader
+                if any((v or "").strip() for v in record.values())]
+
+
+def _payment(record: dict, path: Path, line: int) -> Payment:
+    try:
+        source = record["source"]
+        if source not in ("opening", "recorded"):
+            raise ValueError(f"unknown source {source!r}")
+        return Payment(
+            payment_id=record["payment_id"],
+            membership_id=record["membership_id"],
+            amount=_amount(record["amount"]),
+            paid_on=date.fromisoformat(record["paid_on"]),
+            source=source,
+            recorded_at=datetime.fromisoformat(record["recorded_at"]),
+        )
+    except (ValueError, TypeError, InvalidOperation) as exc:
+        raise ValueError(f"{path.name} line {line}: unreadable payment ({exc}).") from exc
+
+
+# Digits, optionally a point and one or two more: what a rupee amount looks like.
+# Rules out NaN, Infinity, signs, exponents and sub-paisa fractions in one go.
+_AMOUNT = re.compile(r"[0-9]+(\.[0-9]{1,2})?")
+
+
+def _amount(text: str) -> Decimal:
+    """A Payment amount: money that actually arrived, so finite, above 0, at most 2 dp.
+
+    A negative amount would silently raise an Outstanding Balance, a zero one
+    would restart the grace clock for nothing, and NaN/Infinity break every
+    comparison downstream.
+    """
+    if not _AMOUNT.fullmatch(text) or Decimal(text) <= 0:
+        raise ValueError(f"amount {text!r} is not a positive rupee amount with at most 2 decimals")
+    return Decimal(text)
+
+
+def append_payment(path, payment: Payment) -> None:
+    """Append one Payment as one row, creating the file with its header when absent.
+
+    Refuses (ValueError, nothing written) an amount `read_payments` would
+    reject, and a file whose header is not exactly COLUMNS: if the owner
+    reordered the columns in Excel, a row written in COLUMNS order would read
+    back with its fields swapped. If the last row lacks a line ending (a hand
+    edit or a crash), one is appended first so the new row cannot fuse onto
+    it; existing bytes are never altered.
+    """
+    path = Path(path)
+    _amount(str(payment.amount))
+    new = not path.exists() or path.stat().st_size == 0
+    if not new:
+        header = _header(path)
+        if header != list(COLUMNS):
+            raise ValueError(
+                f"{path.name} has columns {', '.join(header)}; expected exactly "
+                f"{', '.join(COLUMNS)}. Restore that column order before recording payments.")
+    unterminated = not new and not _ends_with_newline(path)
+    with path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if new:
+            writer.writerow(COLUMNS)
+        elif unterminated:
+            f.write("\r\n")
+        writer.writerow([
+            payment.payment_id,
+            payment.membership_id,
+            str(payment.amount),
+            payment.paid_on.isoformat(),
+            payment.source,
+            payment.recorded_at.isoformat(),
+        ])
+
+
+def _header(path: Path) -> list[str]:
+    with path.open("r", newline="", encoding="utf-8-sig") as f:
+        return next(csv.reader(f), [])
+
+
+def _ends_with_newline(path: Path) -> bool:
+    with path.open("rb") as f:
+        f.seek(-1, 2)
+        return f.read(1) in (b"\n", b"\r")
+
+
+_RECORDED_ID = re.compile(r"P-([0-9]+)")
+
+
+def next_payment_id(existing) -> str:
+    """The id for the next recorded Payment: `P-NNNN`, one above the highest P- number.
+
+    Based on the maximum rather than the count, so gaps or hand-deleted rows
+    cannot make it reuse an id.
+
+    Pass the RAW ledger, i.e. `read_payments(path)`, never
+    `with_ledger(...).dataset.payments`: the merged dataset leaves out
+    orphaned and conflicting rows, whose ids are still taken in the file. Opening Payments use `OPEN-<membership_id>`,
+    a disjoint namespace, so the two can never collide.
+    """
+    numbers = [int(m.group(1)) for p in existing
+               if (m := _RECORDED_ID.fullmatch(p.payment_id))]
+    return f"P-{max(numbers, default=0) + 1:04d}"

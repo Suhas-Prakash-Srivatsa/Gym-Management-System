@@ -1,6 +1,6 @@
 # Payment ledger and sidecar files
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 02
 
 ## Goal
@@ -29,3 +29,7 @@ Persist the two derived files beside the owner's sheet, and never touch the shee
 - `next_payment_id` never collides with an existing id.
 - `payments_path` / `clean_members_path` resolve next to the input file, not into the working directory.
 - `resolve_input` returns the cleaned rows and a flag when the sidecar exists, the raw rows and no flag when it does not.
+
+## Comments
+
+- 2026-11-08: Implemented, reviewed and committed. `payments.csv` is append-only (mode "a"; the header is checked and `append_payment` refuses a ledger whose header does not match exactly). The amount must be plain text above 0 with at most 2 decimals, checked on both read and append, and goes straight to Decimal. Opening Payments are never written to disk; they are rebuilt from the sheet on each import. `assemble.with_ledger` de-duplicates by payment_id and returns a `LedgerMerge` that reports orphaned rows and conflicting rows instead of counting them. Membership IDs match exactly. `resolve_input` returns `ResolvedInput(rows, columns, used_clean_sidecar)`; sidecars resolve beside the input, and an input named like a sidecar is refused.
