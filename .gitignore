@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+src/files/payments.csv
+src/files/members_clean.csv

@@ -1,0 +1,5 @@
+# The input sheet is read-only; state lives in sidecar files
+
+The owner's spreadsheet is the file their business runs on, so the tool never writes to it. Recorded payments are appended to `payments.csv` and dashboard corrections are written to a cleaned members sidecar, both placed next to the input sheet; on later runs the sidecars take precedence. We chose files over a database because V1 is an open-source tool someone clones and runs locally, and these sidecars are already shaped like the eventual `payments` and `memberships` tables.
+
+**Considered and rejected**: writing a second tab back into the owner's `.xlsx` (risks corrupting the file their business depends on, and fails outright while it is open in Excel on Windows); holding state in session only (corrections and payments would vanish on every rerun).

@@ -1,0 +1,7 @@
+Member ID,Member Name,Membership ID,Membership Type,Date Joined,Membership Amount,Installments,Paid Amount,Last Payment Date
+,Suhas,MS-101,Yearly,1st June,12000,2,6000,1st September
+,Vandana,MS-102,Yearly,5th August,24000,3,8000,
+,Rakesh Sharma,MS-103,Half-Yearly,2026-07-01,9000,2,4000,
+,Rakesh Sharma,MS-104,Monthly,2026-09-01,2000,1,0,
+,Anita Rao,MS-105,Yearly,2026-03-01,12000,0,15000,2026-03-01
+,Vinod Bhatt,MS-106,Quarterly,2026-05-10,6000,2,3000,2026-05-10
