@@ -93,9 +93,7 @@ def append_payment(path, payment: Payment) -> None:
     if not new:
         header = _header(path)
         if header != list(COLUMNS):
-            raise ValueError(
-                f"{path.name} has columns {', '.join(header)}; expected exactly "
-                f"{', '.join(COLUMNS)}. Restore that column order before recording payments.")
+            raise ValueError(_header_problem(path, header))
     unterminated = not new and not _ends_with_newline(path)
     with path.open("a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -111,6 +109,21 @@ def append_payment(path, payment: Payment) -> None:
             payment.source,
             payment.recorded_at.isoformat(),
         ])
+
+
+def _header_problem(path: Path, header: list[str]) -> str:
+    """Why `header` cannot be appended to, in terms of what the owner changed."""
+    expected = ", ".join(COLUMNS)
+    added = [c for c in header if c not in COLUMNS]
+    missing = [c for c in COLUMNS if c not in header]
+    if added or missing:
+        changes = "; ".join(part for part in (
+            f"added column(s) {', '.join(added)}" if added else "",
+            f"missing column(s) {', '.join(missing)}" if missing else "") if part)
+        return (f"{path.name} has {changes}. It must have exactly the columns {expected}: "
+                "remove or restore them, save it, then record the payment again.")
+    return (f"{path.name} has its columns in the order {', '.join(header)}; expected "
+            f"{expected}. Restore that column order before recording payments.")
 
 
 def _header(path: Path) -> list[str]:

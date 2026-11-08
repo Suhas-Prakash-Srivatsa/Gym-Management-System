@@ -17,10 +17,11 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src import views
+from src import recording, views
 from src.assemble import build_dataset, with_ledger
 from src.balances import all_statuses
-from src.ledger import read_payments
+from src.ledger import append_payment, read_payments
+from src.money import format_money
 from src.sidecar import (
     check_sheet,
     clean_members_path,
@@ -52,10 +53,15 @@ OPTION_LABELS = {
 }
 
 
-def configured_today() -> date:
-    """Today, read once for the whole run; GYM_TODAY pins it (shell configuration)."""
+def configured_today(now: datetime) -> date:
+    """Today for the whole run: GYM_TODAY pins it (shell configuration), else `now`'s date."""
     pinned = os.environ.get("GYM_TODAY")
-    return date.fromisoformat(pinned) if pinned else date.today()
+    return date.fromisoformat(pinned) if pinned else now.date()
+
+
+def locked_message(exc: PermissionError) -> str:
+    return (f"{Path(exc.filename or 'A file').name} is open in another program, probably "
+            "Excel. Close it there, then press R to retry.")
 
 
 def default_sheet_path() -> str:
@@ -85,13 +91,13 @@ def uploaded_sheet() -> Path:
     return path
 
 
-def ask_about_stale_corrections(sheet: Path) -> None:
+def ask_about_stale_corrections(sheet: Path, now: datetime) -> None:
     st.warning(
         f"{sheet.name} has changed since your corrections were saved in members_clean.csv. "
         "Using the corrections would hide anything new in the sheet.")
     keep, discard = st.columns(2)
     if discard.button("Discard my corrections and use the sheet", key="discard_corrections"):
-        backup = discard_corrections(sheet, datetime.now())  # the only timestamp clock read
+        backup = discard_corrections(sheet, now)
         st.toast(f"Corrections moved aside to {backup}.")
         st.rerun()
     if keep.button("Keep my corrections", key="keep_corrections"):
@@ -137,8 +143,7 @@ def show_issues(report, rows, sheet: Path, today: date) -> None:
     st.stop()
 
 
-def show_dashboard(rows, sheet: Path, today: date) -> None:
-    merge = with_ledger(build_dataset(rows), read_payments(payments_path(sheet)))
+def show_dashboard(merge, today: date) -> None:
     for warning in views.ledger_warnings(merge):
         st.warning(warning)
     statuses = all_statuses(merge.dataset, today)
@@ -158,13 +163,86 @@ def receivables_table(rows):
                              subset=["Status"], axis=0)
 
 
+def payment_form(dataset, sheet: Path, today: date, now: datetime) -> None:
+    """Member -> (Membership, only when recording says to ask) -> amount -> date -> record.
+
+    Warnings (a future date, a date before joining) show under the date as soon
+    as it is picked, so the owner sees them before pressing Record, and they do
+    not stop the payment. Errors show under the amount after Record is pressed,
+    and nothing is written. Every rule comes from src/recording.py.
+    """
+    st.subheader("Record a payment")
+    receipt = st.session_state.pop("payment_receipt", None)
+    if receipt:
+        st.success(receipt["message"])
+        for warning in receipt["warnings"]:
+            st.warning(warning)
+    members = recording.member_options(dataset)
+    member_label = st.selectbox("Member", list(members), key="payment_member")
+    member_id = members[member_label]
+    membership = choose_membership(dataset, member_id, today)
+    # A fresh key after each recorded payment empties the amount, so a second
+    # click cannot record the same money twice.
+    form = st.session_state.get("payment_form", "")
+    amount_text = st.text_input("Amount (₹)", key=f"payment_amount:{form}", placeholder="6000")
+    beside_amount = st.container()
+    paid_on = st.date_input("Paid on", value=today, key=f"payment_date:{form}",
+                            format="YYYY-MM-DD")
+    beside_date = st.container()
+    check = recording.check_payment(dataset, membership, amount_text, paid_on, today)
+    for warning in check.warnings:
+        beside_date.warning(warning.message)
+    if not st.button("Record payment", type="primary", key="record_payment"):
+        return
+    for error in check.errors:
+        {"amount": beside_amount, "paid_on": beside_date}[error.column].error(error.message)
+    if check.accepted:
+        record_payment(sheet, membership, check, paid_on, now, member_label, beside_amount)
+
+
+def choose_membership(dataset, member_id: str, today: date):
+    default = recording.default_membership(dataset, member_id, today)
+    labels = recording.membership_options(dataset, member_id)
+    if not recording.attribution_required(dataset, member_id):
+        st.caption(f"For {labels[default.membership_id]}")
+        return default
+    options = recording.memberships_of(dataset, member_id)
+    return st.selectbox("Membership", options, index=options.index(default),
+                        format_func=lambda m: labels[m.membership_id],
+                        key=f"payment_membership:{member_id}")
+
+
+def record_payment(sheet: Path, membership, check, paid_on: date, now: datetime,
+                   member_label: str, beside_amount) -> None:
+    ledger_path = payments_path(sheet)
+    try:
+        payment = recording.build_payment(membership, check.amount, paid_on,
+                                          ledger=read_payments(ledger_path), recorded_at=now)
+        append_payment(ledger_path, payment)
+    except PermissionError as exc:
+        beside_amount.error(f"Nothing was recorded. {locked_message(exc)}")
+        return
+    except ValueError as exc:
+        beside_amount.error(f"Nothing was recorded. {exc}")
+        return
+    st.session_state["payment_receipt"] = {
+        "message": (f"Recorded {format_money(payment.amount)} for {member_label} / "
+                    f"{payment.membership_id} on {payment.paid_on.isoformat()} "
+                    f"({payment.payment_id})."),
+        "warnings": [w.message for w in check.warnings],
+    }
+    st.session_state["payment_form"] = payment.payment_id
+    st.rerun()
+
+
 def main() -> None:
     st.set_page_config(page_title="Gym payments", layout="wide")
     st.title("Gym payments")
-    today = configured_today()
+    now = datetime.now()  # the one clock read: today, the .bak stamp and recorded_at
+    today = configured_today(now)
     sheet = choose_sheet()
     if corrections_stale(sheet):
-        ask_about_stale_corrections(sheet)
+        ask_about_stale_corrections(sheet, now)
     resolved = resolve_input(sheet)
     if resolved.used_clean_sidecar:
         st.info(f"Showing corrected data from {clean_members_path(sheet)}, "
@@ -172,14 +250,15 @@ def main() -> None:
     report = validate(resolved.rows, resolved.columns)
     if not report.is_clean:
         show_issues(report, resolved.rows, sheet, today)
-    show_dashboard(resolved.rows, sheet, today)
+    merge = with_ledger(build_dataset(resolved.rows), read_payments(payments_path(sheet)))
+    show_dashboard(merge, today)
+    payment_form(merge.dataset, sheet, today, now)
 
 
 try:
     main()
 except PermissionError as exc:
-    st.error(f"{Path(exc.filename or 'A file').name} is open in another program, probably "
-             "Excel. Close it there, then press R to retry.")
+    st.error(locked_message(exc))
 except FileNotFoundError as exc:
     st.error(f"There is no file at {exc.filename}. Check the path and try again.")
 except OSError as exc:

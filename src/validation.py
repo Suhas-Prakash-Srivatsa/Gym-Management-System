@@ -346,7 +346,8 @@ def apply_fixes(
     """Return corrected copies of `rows`; the input is never mutated, nothing is written.
 
     `current_year` is required only for `infer_current_year`; the caller
-    passes it (from the one `date.today()` in app.py), never this module.
+    passes it (from app.py's one clock read: `now.date()`, unless GYM_TODAY
+    pins it), never this module.
 
     `use_date_joined` fixes run last, so they copy the already-corrected
     Date Joined regardless of the order the answers arrive in.

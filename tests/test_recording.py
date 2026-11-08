@@ -11,7 +11,11 @@ from src.models import Dataset, Member, Membership, MembershipType, Payment
 from src.recording import (
     attribution_required,
     build_payment,
+    check_payment,
     default_membership,
+    member_options,
+    membership_options,
+    memberships_of,
     validate_payment,
 )
 from src.sheet import read_rows
@@ -290,3 +294,94 @@ def test_recording_reads_no_clock_or_files():
         encoding="utf-8")
     for forbidden in ("today()", "now()", "open(", "streamlit", "float", "import datetime"):
         assert forbidden not in source
+
+
+# --- check_payment: the payment form's typed amount, parsed then validated ---
+
+
+def test_a_typed_amount_is_parsed_and_accepted(book1):
+    check = check_payment(book1, _membership(book1, "MS-001"), " ₹6,000 ", TODAY, TODAY)
+    assert check.amount == Decimal("6000")
+    assert check.issues == ()
+    assert check.accepted
+
+
+@pytest.mark.parametrize("typed", ["", "   ", "six thousand", "6,000/-", "-500", "1e3"])
+def test_text_that_is_not_an_amount_is_refused_beside_the_amount(book1, typed):
+    check = check_payment(book1, _membership(book1, "MS-001"), typed, TODAY, TODAY)
+    assert check.amount is None
+    assert _summary(check.issues) == [("amount", "invalid_amount", "error")]
+    assert "6000" in check.issues[0].message  # shows how to type it
+    assert not check.accepted
+
+
+def test_date_warnings_still_show_when_the_amount_is_unreadable(book1):
+    check = check_payment(book1, _membership(book1, "MS-001"), "", date(2026, 12, 1), TODAY)
+    assert _summary(check.issues) == [("amount", "invalid_amount", "error"),
+                                      ("paid_on", "paid_on_in_future", "warning")]
+
+
+def test_check_payment_carries_validate_payments_rules(book1):
+    ms = _membership(book1, "MS-001")
+    over = check_payment(book1, ms, "6001", TODAY, TODAY)
+    assert over.amount == Decimal("6001") and not over.accepted
+    assert over.issues[0].message == (
+        "Suhas Prakash / MS-001 has ₹6,000 outstanding — enter ₹6,000 or less.")
+    assert _summary(check_payment(book1, ms, "0", TODAY, TODAY).issues) == [
+        ("amount", "amount_not_positive", "error")]
+    assert _summary(check_payment(book1, ms, "100.005", TODAY, TODAY).issues) == [
+        ("amount", "invalid_amount", "error")]
+
+
+def test_a_warning_alone_does_not_stop_the_payment(book1):
+    check = check_payment(book1, _membership(book1, "MS-001"), "3000", date(2026, 11, 9), TODAY)
+    assert _summary(check.issues) == [("paid_on", "paid_on_in_future", "warning")]
+    assert check.accepted
+
+
+# --- what the payment form offers ---
+
+
+def test_members_are_offered_by_name_in_sheet_order_never_by_key(book1):
+    options = member_options(book1)  # what the form shows -> which Member it means
+    assert len(options) == 24
+    assert list(options)[:2] == ["Suhas Prakash", "Vandana Rao"]
+    assert options["Suhas Prakash"] == "M001"
+    assert options["Priya Nair"] == "M004"
+    assert not any(key in label for label, key in options.items())
+
+
+def test_two_people_who_share_a_name_are_told_apart_by_their_memberships():
+    a, b = Member("rakesh sharma", "Rakesh Sharma"), Member("rakesh sharma#2", "Rakesh Sharma")
+    dataset = Dataset((a, b), (_ms("MS-003", date(2026, 1, 1), a.member_id),
+                               _ms("MS-004", date(2026, 2, 1), b.member_id),
+                               _ms("MS-009", date(2026, 3, 1), b.member_id)), ())
+    assert member_options(dataset) == {
+        "Rakesh Sharma (MS-003)": "rakesh sharma",
+        "Rakesh Sharma (MS-004, MS-009)": "rakesh sharma#2",
+    }
+
+
+def test_only_two_of_book1s_24_members_are_asked_which_membership(book1):
+    asked = [label for label, key in member_options(book1).items()
+             if attribution_required(book1, key)]
+    assert asked == ["Suhas Prakash", "Manoj Verma"]  # Suhas Prakash, Manoj Verma: 22 never see the selector
+
+
+def test_a_members_memberships_are_offered_with_what_each_still_owes(book1):
+    assert membership_options(book1, "M001") == {
+        "MS-001": "MS-001 · Yearly · ₹6,000 outstanding",
+        "MS-025": "MS-025 · Monthly · fully paid",
+    }
+    assert list(membership_options(book1, "M004")) == ["MS-004"]
+
+
+def test_a_check_splits_its_issues_into_errors_and_warnings(book1):
+    check = check_payment(book1, _membership(book1, "MS-001"), "6001", date(2026, 12, 1), TODAY)
+    assert [i.code for i in check.errors] == ["exceeds_outstanding"]
+    assert [i.code for i in check.warnings] == ["paid_on_in_future"]
+
+
+def test_memberships_of_a_member_are_in_sheet_order(book1):
+    assert [m.membership_id for m in memberships_of(book1, "M009")] == ["MS-009", "MS-026"]
+    assert memberships_of(book1, "m009") == []

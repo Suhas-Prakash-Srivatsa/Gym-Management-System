@@ -269,10 +269,12 @@ def test_app_has_no_arithmetic_or_ordering_comparisons():
 
 
 def test_app_reads_the_clock_exactly_once():
+    # One `now` per run: today (unless GYM_TODAY pins it), the .bak stamp and
+    # recorded_at all come from it, so they can never disagree.
     source = APP.read_text(encoding="utf-8")
-    assert source.count("date.today()") == 1
-    # Timestamps (backup names, later recorded_at) come from one clock read, never dates.
-    assert source.count("datetime.now()") <= 1
+    assert source.count("datetime.now()") == 1
+    assert "date.today()" not in source
+    assert "now.date()" in source
 
 
 def test_the_clock_is_read_nowhere_in_src():

@@ -476,3 +476,15 @@ def test_a_missing_sheet_is_a_file_not_found(tmp_path):
 
 def test_an_existing_sheet_passes_the_check(sheet):
     assert check_sheet(sheet) == sheet
+
+
+def test_append_refuses_a_ledger_with_an_added_column_and_names_it(tmp_path):
+    # The owner opened payments.csv in Excel and added a Notes column.
+    ledger = tmp_path / "payments.csv"
+    content = (b"payment_id,membership_id,amount,paid_on,source,recorded_at,Notes\r\n"
+               b"P-0001,MS-001,500,2026-11-01,recorded,2026-11-01T10:00:00,cash\r\n")
+    ledger.write_bytes(content)
+    with pytest.raises(ValueError, match="Notes") as refused:
+        append_payment(ledger, payment())
+    assert "order" not in str(refused.value)  # nothing was reordered; don't send the owner looking
+    assert ledger.read_bytes() == content

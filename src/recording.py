@@ -9,17 +9,19 @@ Payment already counted is seen. Membership and Member IDs match exactly.
 """
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from src.balances import next_due_on, outstanding_balance
 from src.identity import next_payment_id
 from src.models import Dataset, Membership, Payment
-from src.money import format_money, quantize
+from src.money import format_money, parse_money, quantize
 from src.validation import Issue
 
 
-def _memberships_of(dataset: Dataset, member_id: str) -> list[Membership]:
+def memberships_of(dataset: Dataset, member_id: str) -> list[Membership]:
+    """The Member's Memberships, in sheet order (IDs match exactly)."""
     return [m for m in dataset.memberships if m.member_id == member_id]
 
 
@@ -28,7 +30,34 @@ def attribution_required(dataset: Dataset, member_id: str) -> bool:
 
     With one Membership the payment is attributed automatically.
     """
-    return len(_memberships_of(dataset, member_id)) > 1
+    return len(memberships_of(dataset, member_id)) > 1
+
+
+def member_options(dataset: Dataset) -> dict[str, str]:
+    """What the payment form shows for each Member -> that Member's key, in sheet order.
+
+    The name, never the key (a generated key like "suhas prakash" or an
+    internal "#2" suffix means nothing to the owner). Two Members who share
+    a name are told apart by their Membership IDs, which the dashboard
+    table also shows, so every label is unique and maps back to one Member.
+    """
+    names = [m.name for m in dataset.members]
+
+    def label(member) -> str:
+        if names.count(member.name) == 1:
+            return member.name
+        ids = ", ".join(ms.membership_id for ms in memberships_of(dataset, member.member_id))
+        return f"{member.name} ({ids})"
+    return {label(m): m.member_id for m in dataset.members}
+
+
+def membership_options(dataset: Dataset, member_id: str) -> dict[str, str]:
+    """Membership ID -> its label in the selector, in sheet order: ID, type, what it still owes."""
+    def label(ms: Membership) -> str:
+        outstanding = outstanding_balance(ms, dataset.payments)
+        owes = f"{format_money(outstanding)} outstanding" if outstanding > 0 else "fully paid"
+        return f"{ms.membership_id} · {ms.type.value} · {owes}"
+    return {ms.membership_id: label(ms) for ms in memberships_of(dataset, member_id)}
 
 
 def default_membership(dataset: Dataset, member_id: str, today: date) -> Membership:
@@ -43,7 +72,7 @@ def default_membership(dataset: Dataset, member_id: str, today: date) -> Members
     Raises ValueError when the Member holds no Membership (not a user error:
     the shell only offers Members from the dataset).
     """
-    candidates = _memberships_of(dataset, member_id)
+    candidates = memberships_of(dataset, member_id)
     if not candidates:
         raise ValueError(f"Member {member_id!r} holds no Membership.")
     owing = [m for m in candidates if outstanding_balance(m, dataset.payments) > 0]
@@ -95,24 +124,36 @@ def validate_payment(
 
     Raises ValueError if `membership` is not in `dataset` (a shell bug).
     """
+    who = _who(dataset, membership)
+    return _amount_issues(dataset, membership, amount, who) + _date_issues(
+        membership, paid_on, today, who)
+
+
+def _who(dataset: Dataset, membership: Membership) -> str:
+    """"Suhas Prakash / MS-001", for messages. ValueError if not in the dataset."""
     if membership not in dataset.memberships:
         raise ValueError(f"Membership {membership.membership_id!r} is not in the dataset.")
     member = next(m for m in dataset.members if m.member_id == membership.member_id)
-    who = f"{member.name} / {membership.membership_id}"
-    issues = []
+    return f"{member.name} / {membership.membership_id}"
+
+
+def _amount_issues(dataset: Dataset, membership: Membership, amount: Decimal, who: str) -> list[Issue]:
     if not _whole_paise(amount):
-        issues.append(Issue(None, "amount", "invalid_amount",
-                            f"{amount} is not an amount in rupees and paise (at most 2 decimals)."))
-    elif amount <= 0:
-        issues.append(Issue(None, "amount", "amount_not_positive",
-                            "Enter an amount above ₹0."))
-    else:
-        outstanding = outstanding_balance(membership, dataset.payments)
-        if amount > outstanding:
-            ceiling = format_money(outstanding)
-            message = (f"{who} has nothing outstanding." if outstanding == 0 else
-                       f"{who} has {ceiling} outstanding — enter {ceiling} or less.")
-            issues.append(Issue(None, "amount", "exceeds_outstanding", message))
+        return [Issue(None, "amount", "invalid_amount",
+                      f"{amount} is not an amount in rupees and paise (at most 2 decimals).")]
+    if amount <= 0:
+        return [Issue(None, "amount", "amount_not_positive", "Enter an amount above ₹0.")]
+    outstanding = outstanding_balance(membership, dataset.payments)
+    if amount > outstanding:
+        ceiling = format_money(outstanding)
+        message = (f"{who} has nothing outstanding." if outstanding == 0 else
+                   f"{who} has {ceiling} outstanding — enter {ceiling} or less.")
+        return [Issue(None, "amount", "exceeds_outstanding", message)]
+    return []
+
+
+def _date_issues(membership: Membership, paid_on: date, today: date, who: str) -> list[Issue]:
+    issues = []
     if paid_on < membership.joined_on:
         issues.append(Issue(None, "paid_on", "paid_before_joining",
                             f"{who} began on {membership.joined_on.isoformat()}; a payment "
@@ -155,3 +196,52 @@ def build_payment(
         source="recorded",
         recorded_at=recorded_at,
     )
+
+
+@dataclass(frozen=True)
+class PaymentCheck:
+    """The payment form's answer: the amount as understood, and what is wrong with it.
+
+    `amount` is None when the typed text is not an amount at all.
+    """
+
+    amount: Decimal | None
+    issues: tuple[Issue, ...]
+
+    @property
+    def accepted(self) -> bool:
+        """True when the payment may be recorded: an amount, and no blocking issue."""
+        return self.amount is not None and not self.errors
+
+    @property
+    def errors(self) -> tuple[Issue, ...]:
+        """Blocking issues: the payment must not be recorded."""
+        return tuple(i for i in self.issues if i.blocking)
+
+    @property
+    def warnings(self) -> tuple[Issue, ...]:
+        """Shown to the owner, but the payment may still be recorded."""
+        return tuple(i for i in self.issues if not i.blocking)
+
+
+def check_payment(
+    dataset: Dataset, membership: Membership, amount_text: str, paid_on: date, today: date
+) -> PaymentCheck:
+    """Parse the amount as the owner typed it ("6000", "₹6,000"), then `validate_payment`.
+
+    Text that is not an amount (blank, words, a sign, an exponent) is an
+    `invalid_amount` error with `amount=None`; the date warnings are still
+    reported, so the form can show everything at once. Never raises for
+    anything typed.
+    """
+    who = _who(dataset, membership)
+    dated = _date_issues(membership, paid_on, today, who)
+    try:
+        amount = parse_money(amount_text)
+    except ValueError:
+        typed = amount_text.strip()
+        problem = f"{typed!r} is not an amount. " if typed else ""
+        unreadable = Issue(None, "amount", "invalid_amount",
+                           f"{problem}Enter rupees, for example 6000 or ₹6,000.")
+        return PaymentCheck(None, (unreadable, *dated))
+    return PaymentCheck(amount, tuple(_amount_issues(dataset, membership, amount, who) + dated))
