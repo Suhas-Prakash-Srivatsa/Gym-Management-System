@@ -28,3 +28,8 @@ def test_parse_date_accepts_supported_formats_as_the_same_date(raw):
 @pytest.mark.parametrize("raw", ["1st June", "1 June", "01/06", "", "abc", "2026-02-30"])
 def test_parse_date_returns_none_for_yearless_or_invalid_input(raw):
     assert parse_date(raw) is None
+
+
+@pytest.mark.parametrize("raw", ["01/06/26", "26-06-01", "1 June 26", "01/06/026", "0026-06-01"])
+def test_parse_date_returns_none_for_short_years_rather_than_guessing_a_century(raw):
+    assert parse_date(raw) is None

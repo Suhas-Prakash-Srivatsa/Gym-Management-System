@@ -19,13 +19,16 @@ def add_calendar_months(d: date, months: int) -> date:
 def parse_date(raw: str) -> date | None:
     """Parse `2026-06-01`, `01/06/2026` or `1 June 2026`.
 
-    Returns None for anything without a year (e.g. `1st June`) or otherwise
-    unparseable; validation turns that into a question for the owner.
+    Returns None for anything without a year (e.g. `1st June`), with a year
+    shorter than four digits (`01/06/26`, `0026-06-01`: the century is never
+    guessed), or otherwise unparseable; validation turns that into a question
+    for the owner.
     """
     cleaned = " ".join(_ORDINAL.sub("", raw).split())
     for fmt in _FORMATS:
         try:
-            return datetime.strptime(cleaned, fmt).date()
+            parsed = datetime.strptime(cleaned, fmt).date()
         except ValueError:
             continue
+        return parsed if parsed.year >= 1000 else None
     return None
