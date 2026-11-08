@@ -1,6 +1,6 @@
 # Golden test and README
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 06, 09, 12, 14
 
 ## Goal
@@ -33,3 +33,7 @@ README covers: what the tool answers, the column contract (required vs optional,
 ## Tests
 
 `pytest` green across all test files, run and output confirmed before this ticket is closed.
+
+## Comments
+
+- 2026-11-09 (committer): Reviewed (standards + spec): no blocking findings. Full suite green: 809 passed in 73.83s. Golden figures 19 / 11 / ₹97,300 / ₹60,950 with the Rohit (MS-011) boundary. Committed together with the ticket-14 letter-case re-upload fix (`src/sidecar.py`) and the doc pass (TECHNICAL-PLAN, GLOSSARY, issues 01 and 09). Non-blocking notes: `_stored_as` matches any entry in the folder, not just files or dirs (an `is_dir()`/`is_file()` check would close it); the casefold comparison now lives in a few places and could share one helper; the two golden test files each build their own Book1.csv path instead of the shared `FILES` constant.

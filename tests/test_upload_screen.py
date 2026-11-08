@@ -113,6 +113,27 @@ def test_a_changed_re_upload_replaces_the_copy_but_keeps_payments_and_correction
     assert ledger.read_bytes() == b"ledger" and clean.read_bytes() == b"clean"
 
 
+def test_a_re_upload_differing_only_in_letter_case_stays_listed_under_its_first_name(tmp_path):
+    # Windows treats Book1.csv and book1.csv as one file; the owner means one sheet.
+    data = tmp_path / "data"
+    sheet = (FILES / "Book1.csv").read_bytes()
+    first = receive_upload(data, "Book1.csv", sheet).path
+    payments_path(first).write_bytes(b"ledger")
+    again = receive_upload(data, "book1.csv", sheet + b"\n")
+    assert again.path == first and again.path.name == "Book1.csv"
+    assert again.changed is True and again.kept_payments is True
+    assert first.read_bytes() == sheet + b"\n"
+    assert working_copies(data) == [first]
+
+
+def test_a_copy_whose_name_differs_from_its_folder_only_in_case_is_listed(tmp_path):
+    # As left behind by the earlier code, which renamed Book1.csv to book1.csv in place.
+    folder = tmp_path / "data" / "Book1_csv"
+    folder.mkdir(parents=True)
+    (folder / "book1.csv").write_bytes(b"a\n")
+    assert [p.name for p in working_copies(tmp_path / "data")] == ["book1.csv"]
+
+
 # --- The screen, through AppTest --------------------------------------------------------
 
 from streamlit.testing.v1 import AppTest  # noqa: E402

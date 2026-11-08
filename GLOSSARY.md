@@ -64,6 +64,14 @@ _Avoid_: Flagged, defaulter, late, at-risk
 The sum of Outstanding Balance across every Membership, whether or not it is Overdue yet. The headline figure of the dashboard.
 _Avoid_: Total pending, revenue, dues
 
+**Total Membership Value**:
+The sum of Contract Amount across every Membership, paid or not. What all the contracts are worth, against which Total Receivable is what is still to come in.
+_Avoid_: Revenue, turnover, sales
+
+**Total Members**:
+The number of distinct Members holding the Memberships shown. A Member with a renewal counts once.
+_Avoid_: Total memberships, headcount, customers
+
 ### Explicit non-concepts
 
 These were considered and deliberately left out of the model. Do not reintroduce them without a decision.

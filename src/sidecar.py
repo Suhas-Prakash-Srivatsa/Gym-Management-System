@@ -154,17 +154,33 @@ def _folder_name(name: str) -> str:
     return "_".join(filter(None, (Path(name).stem, Path(name).suffix[1:])))
 
 
+def _stored_as(parent: Path, name: str) -> str:
+    """`name` as already stored in `parent` ignoring letter case, else `name` itself.
+
+    Windows treats Book1.csv and book1.csv as one file, and so does the owner,
+    so a re-upload under another case reuses the first upload's names rather
+    than renaming the copy or its folder.
+    """
+    if parent.is_dir():
+        for entry in sorted(parent.iterdir()):
+            if entry.name.casefold() == name.casefold():
+                return entry.name
+    return name
+
+
 def _working_copy_path(data_dir, filename: str) -> Path:
     name = re.split(r"[\\/]", filename)[-1]  # base name only, whichever separator
     _check_upload_name(name)
     _refuse_sidecar_name(Path(name))
-    return Path(data_dir).resolve() / _folder_name(name) / name
+    folder = Path(data_dir).resolve()
+    folder = folder / _stored_as(folder, _folder_name(name))
+    return folder / _stored_as(folder, name)
 
 
 def _is_working_copy(path: Path) -> bool:
     return (path.is_file() and path.suffix.casefold() in UPLOAD_TYPES
             and path.name.casefold() not in (PAYMENTS_NAME, CLEAN_MEMBERS_NAME)
-            and path.parent.name == _folder_name(path.name))
+            and path.parent.name.casefold() == _folder_name(path.name).casefold())
 
 
 def _last_used(folder: Path) -> int:

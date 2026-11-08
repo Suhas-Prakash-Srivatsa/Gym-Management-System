@@ -1,0 +1,6 @@
+# Install with:  pip install -r requirements.txt   (Python 3.14)
+# Minimums are the versions the tool is tested with; the next major version is excluded.
+streamlit>=1.67,<2     # the screen
+pandas>=3.1,<4         # tables on the screen (app.py styles the dashboard table with it)
+openpyxl>=3.1.5,<4     # reading Excel (.xlsx) sheets
+pytest>=9.1,<10        # running the tests

@@ -9,7 +9,7 @@ Shape derived data into exactly what the screen shows — as plain Python data, 
 
 ## Deliverables
 
-`src/views.py`: `tiles`, `receivables_rows`, `format_money`.
+`src/views.py`: `tiles`, `receivables_rows`; `format_money` lives in `src/money.py` and is re-exported by views.
 
 ## Acceptance criteria
 

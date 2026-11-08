@@ -41,9 +41,10 @@ app.py  (shell: Streamlit only)
   ├── views.py ─────────► balances.py ──► dates.py
   │                          │            money.py
   │                          └──► models.py
-  ├── recording.py ─────► balances.py
-  ├── assemble.py ──────► models.py, money.py, dates.py
-  ├── validation.py ────► money.py, dates.py
+  ├── recording.py ─────► balances.py, identity.py
+  ├── assemble.py ──────► models.py, money.py, dates.py, identity.py
+  ├── validation.py ────► money.py, dates.py, identity.py
+  │                       (identity.py ──► models.py)
   ├── sheet.py          (shell: reads bytes)
   ├── ledger.py         (shell: reads/appends payments.csv)
   └── sidecar.py        (shell: paths, members_clean.csv)
@@ -72,10 +73,19 @@ The glossary expressed as code. No behaviour, no I/O.
 
 `contract_amount` and `amount` are `Decimal`, never `float` (see `money.py`).
 
+### `src/identity.py` — which rows are Memberships, and what they are called
+
+- `is_blank_row(row)`, `member_key(row)`, `generate_membership_id(key, n)`
+- `effective_membership_ids(rows) -> list[str | None]` — the ID each row will carry once assembled (`None` for a blank row)
+- `opening_payment_id(membership_id)` → `OPEN-<membership_id>`; `next_payment_id(existing)` → `P-NNNN`, one above the highest
+
+Why its own module: validation (finding colliding IDs) and assembly (naming what it builds) must apply exactly the same identity scheme, or a sheet could validate clean and still assemble two Memberships under one ID. It depends only on `models`, so no caller creates a cycle.
+
 ### `src/money.py` — rupees that add up
 
 - `parse_money(raw: str) -> Decimal` — strips `₹`, commas and spaces; rejects negatives and non-numerics. Why: the sheet is typed by a human, so `"12,000"` and `"₹ 9500"` are normal input, and a bare `Decimal(raw)` raises on both.
 - `quantize(d: Decimal) -> Decimal` — two decimal places, `ROUND_HALF_UP`.
+- `format_money(d: Decimal) -> str` — `₹97,300`, Indian digit grouping (re-exported by `views`).
 
 Why the module exists at all: `0.1 + 0.2 != 0.3` in binary floating point. With `float`, a ₹12,500 contract split across payments can leave an Outstanding Balance of `0.000000001`, which is `> 0`, which tags a fully-paid member as owing money — and the owner chases a member who paid in full. `Decimal` makes the arithmetic exact. Isolating it in one module means there is one place to check that no `float` ever enters.
 
@@ -113,7 +123,7 @@ Why aliases: a real gym's sheet says `Name`, not `Member Name`. Demanding our ex
 
 ### `src/validation.py` — turning bad input into answerable questions
 
-- `Issue(row_number, column, code, message, fix_options)` and `Report(issues, is_fatal)`
+- `Issue(row_number, column, code, message, fix_options, related_rows, severity)` and `Report(issues, is_fatal)` — `severity` is `"error"` (blocking, every sheet rule) or `"warning"` (shown, does not block; only the payment-date checks in `recording.py`); `Report.is_clean` means no blocking issue
 - One function per rule, each `(row, row_number) -> list[Issue]`: `check_required_columns`, `check_dates`, `check_membership_type`, `check_instalments`, `check_amounts`, `check_last_payment_date`
 - `check_duplicate_names(rows) -> list[Issue]` — operates across rows, not within one
 - `validate(rows, columns) -> Report`
@@ -125,10 +135,11 @@ Why validation is fatal before any figure is shown: a dashboard built on half-va
 
 ### `src/assemble.py` — raw rows into the domain
 
-- `member_key(row) -> str` — `Member ID` when present, else normalised name
-- `generate_membership_id(member_key, n) -> str` — `<key>-01`, `-02`
+- `member_key(row) -> str` — `Member ID` when present, else normalised name (in `identity.py`, re-exported)
+- `generate_membership_id(member_key, n) -> str` — `<key>-01`, `-02` (in `identity.py`, re-exported)
 - `opening_payment(membership, row) -> Payment | None` — `None` when `Paid Amount` is 0
 - `build_dataset(rows) -> Dataset`
+- `with_ledger(dataset, ledger_payments) -> LedgerMerge(dataset, orphaned, conflicting)` — adds the Payment Ledger to the sheet's Dataset; exact duplicates are dropped, and Payments for an unknown Membership (`orphaned`) or reusing a taken `payment_id` (`conflicting`) are left out and returned for the shell to report, never counted
 
 Why this module is separate from `validation.py`: validation answers "is this input usable?", assembly answers "what does it mean?". Fusing them produces a function that both reports errors and constructs objects, which cannot be tested for either cleanly. Why `opening_payment` returns `None` for zero: a ₹0 Payment is not a fact — it never happened — and inserting one would wrongly set a Last Payment Date, resetting the grace clock for a member who has paid nothing. That is precisely the "never paid" case the spec singles out.
 
@@ -138,7 +149,7 @@ Why IDs are generated here rather than in the sheet reader: generation needs the
 
 - `read_payments(path) -> list[Payment]`
 - `append_payment(path, payment) -> None` — opens in append mode, writes one row, creates the file with a header if absent
-- `next_payment_id(existing) -> str`
+- `next_payment_id(existing) -> str` (in `identity.py`; pass the raw ledger, never the merged dataset)
 
 Why append mode specifically, rather than read-modify-write: it is the mechanical guarantee behind §3. A rewrite-the-whole-file implementation can truncate the ledger on a crash and silently destroy payment history; `"a"` physically cannot touch existing bytes.
 
@@ -147,16 +158,21 @@ Why append mode specifically, rather than read-modify-write: it is the mechanica
 - `payments_path(input_path) -> Path` and `clean_members_path(input_path) -> Path`
 - `read_clean_members(path) -> list[RawRow] | None`
 - `write_clean_members(path, rows) -> None`
-- `resolve_input(input_path) -> tuple[list[RawRow], bool]` — prefers the cleaned sidecar, reports which was used
+- `check_sheet(input_path) -> Path` — the path if it names an existing file; a sentence for a folder or a missing file
+- `resolve_input(input_path) -> ResolvedInput(rows, columns, used_clean_sidecar)` — prefers the cleaned sidecar, reports which was used; `columns` is exactly what the reader found, for `validate`
+- Uploads (ticket 14): `receive_upload(data_dir, filename, data) -> SavedUpload(path, changed, kept_payments)` keeps the bytes as a working copy at `<data_dir>/<stem>_<ext>/<name>`, refusing unreadable, empty or badly named files before writing anything; a re-upload under the same name (in any letter case) reaches the same copy and its sidecars. `working_copies(data_dir) -> list[Path]` lists earlier uploads, most recently used first
+- Stale corrections: `corrections_stale`, `discard_corrections` (moves `members_clean.csv` aside to a `.bak`, never deletes) and `keep_corrections`
 
 Why a module for path logic: the rule "sidecars sit next to the input and take precedence on later runs" (ADR 0002) is a real policy, and if it is inlined at three call sites it will be implemented inconsistently at three call sites. Why `resolve_input` reports *which* file it used: the owner must be told they are seeing corrected data, or the cleaned sidecar becomes an invisible second truth.
 
 ### `src/recording.py` — the rules for new money
 
 - `attribution_required(dataset, member_id) -> bool` — `True` only when the Member holds more than one Membership
-- `default_membership(dataset, member_id, today) -> Membership` — earliest Next Due Date
-- `validate_payment(membership, payments, amount, paid_on, today) -> list[Issue]` — rejects `amount > outstanding` with the ceiling in the message, rejects `amount <= 0`, warns on a future `paid_on`
-- `build_payment(membership, amount, paid_on, existing) -> Payment`
+- `default_membership(dataset, member_id, today) -> Membership` — earliest Next Due Date among Memberships with Outstanding > 0; if none owe, earliest overall
+- `member_options(dataset) -> dict[label, member_id]` and `membership_options(dataset, member_id) -> dict[membership_id, label]` — what the payment form's selectors show (names, never keys; ID, type and what is still owed)
+- `validate_payment(dataset, membership, amount, paid_on, today) -> list[Issue]` — errors: an amount that is not whole paise, `amount <= 0`, `amount > outstanding` (the ceiling in the message); warnings (`severity="warning"`): `paid_on` before Date Joined, `paid_on` in the future
+- `check_payment(dataset, membership, amount_text, paid_on, today) -> PaymentCheck(amount, issues)` — parses the amount as typed, then `validate_payment`; `.accepted`, `.errors`, `.warnings` are what the form decides by
+- `build_payment(membership, amount, paid_on, ledger, recorded_at) -> Payment` — `ledger` is the raw `read_payments(path)`; `recorded_at` comes from the shell's clock
 
 Why attribution is a core function and not a UI condition: "ask only when the member has several Memberships" is a domain rule (issue `01` exists to revisit it), and a rule buried in an `if` inside `app.py` cannot be revisited — nobody will find it. Why rejection returns `Issue`s rather than raising: the form needs to show the message next to the field, and exceptions are a poor fit for expected user error.
 
@@ -164,15 +180,15 @@ Why attribution is a core function and not a UI condition: "ask only when the me
 
 - `tiles(statuses) -> dict` — total members, total membership value, Total Receivable, Overdue
 - `receivables_rows(statuses, show_fully_paid=False) -> list[dict]` — filters Outstanding > 0, sorts by Next Due Date ascending, attaches the `DUE` tag
-- `format_money(d) -> str` — `₹97,300`
+- `format_money` is defined in `money.py` and re-exported here
 
 Why a projection layer rather than letting `app.py` sort and filter: the ordering rule ("most overdue first") and the tile definitions are decisions from the spec, not presentation. Keeping them here means the FastAPI migration serialises `tiles()` and `receivables_rows()` straight to JSON and reimplements nothing. `app.py` is left with the genuinely visual part: which widget, what colour.
 
 ### `app.py` — the shell
 
-Sequence, and nothing more: upload → `resolve_input` → `validate` → if issues, render them with fix buttons → `apply_fixes` → `write_clean_members` → `build_dataset` → `read_payments` → `all_statuses(dataset, date.today())` → `tiles` + `receivables_rows` → render → payment form → `validate_payment` → `append_payment` → rerun.
+Sequence, and nothing more: `now = datetime.now()`; `today = GYM_TODAY or now.date()` → upload screen (`receive_upload`, or reopen one of `working_copies`; `GYM_SHEET` / a CLI argument opens a path directly) → stale-corrections prompt if `corrections_stale` → `resolve_input` → `validate` → if issues, render them with fix buttons → `apply_fixes` → `write_clean_members` → rerun; else `with_ledger(build_dataset(rows), read_payments(...))` → `all_statuses(dataset, today)` → `tiles` + `receivables_rows` → render → payment form → `check_payment` → `build_payment(..., recorded_at=now)` → `append_payment` → rerun.
 
-`date.today()` is called **here, exactly once**, and passed down. That is the single line of the program that is not a pure function of its inputs, and keeping it in the shell is what makes everything above deterministic.
+The clock is read **here, exactly once** (`now`), and passed down: `today` for the rules, `now` for `recorded_at` and the `.bak` stamp. That is the single line of the program that is not a pure function of its inputs, and keeping it in the shell is what makes everything above deterministic.
 
 The constraint from ADR 0001 restated as something checkable in review: `app.py` contains no `+`, `-`, `*`, `/`, no comparison of dates, and no `if` on a business condition. If one appears, the rule it encodes belongs in `src/`.
 
