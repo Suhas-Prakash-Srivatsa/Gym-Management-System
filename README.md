@@ -1,6 +1,6 @@
-# Gym payments
+# Gym Management System
 
-A small tool for a gym owner. You give it the members sheet you already keep. It shows you who still owes money, how much in total, and who is late. You can also record a payment when a member pays.
+A small tool for a gym owner to help manage receivables from members. Owners can simply feed their sheet with information related to members, membership and payments. It shows you who still owes money, how much in total, and who is late. You can also record a payment when a member pays.
 
 ## What it answers
 
