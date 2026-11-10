@@ -20,6 +20,7 @@ import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
+from typing import NoReturn
 
 import pandas as pd
 import streamlit as st
@@ -92,7 +93,7 @@ def choose_sheet() -> Path:
     upload_screen()
 
 
-def upload_screen():
+def upload_screen() -> NoReturn:
     st.subheader("Upload your members sheet")
     st.write("Choose the members sheet your gym keeps, saved as CSV or Excel (.csv or .xlsx).")
     # No `type=` filter: Streamlit would refuse other files with a traceback the
@@ -296,7 +297,7 @@ def record_payment(sheet: Path, membership, check, paid_on: date, now: datetime,
 
 def main() -> None:
     st.set_page_config(page_title="Gym payments", layout="wide")
-    st.title("Gym payments")
+    st.title("Gym Management System")
     now = datetime.now()  # the one clock read: today, the .bak stamp and recorded_at
     today = configured_today(now)
     sheet = choose_sheet()
