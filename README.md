@@ -1,6 +1,22 @@
 # Gym payments
 
-A small tool for a gym owner. You give it the members sheet you already keep. It shows you who still owes money, how much in total, and who is late. You can also record a payment when a member pays.
+Payment tracking for gym managers, built on the members sheet you already keep.
+
+## The problem
+
+Most gyms keep their members in a spreadsheet: who joined, on which plan, for how much, and what they have paid. To find out who needs to pay, the manager has to go down that sheet row by row, work out each member's balance, and remember who has been owing for too long. It is slow, and it is easy to miss someone.
+
+## What this tool does
+
+You give it that same sheet, and it tells you:
+
+- **who owes money**, and how much each one owes,
+- **how much is owed in total**, and
+- **who is overdue**, most overdue first, marked in red.
+
+When a member pays, or a new member joins, you enter it on the dashboard and the figures update straight away. Your own sheet is never changed.
+
+It was built quickly with [Claude Code](https://claude.com/claude-code), an AI coding assistant, working the way a small team would: a written spec, then small tickets, each one built test-first and checked by separate acceptance tests. The spec and tickets are kept in `.scratch/`.
 
 ## What it answers
 
@@ -29,6 +45,17 @@ You need Python 3.14 on your computer.
 
 Your web browser opens on the tool. It runs only on your own computer.
 
+## Try it with dummy data
+
+No sheet to hand? On the upload screen, press **Skip to dashboard with dummy data**. The dashboard opens on a made-up gym, with a **Demo data** banner at the top.
+
+- Everything works as it does with your own sheet: you can record payments and add members.
+- The figures are worked out from the made-up sheet, exactly as they would be from yours. Its dates move with today's date, so there is always a mix of members who are paid up, owing and overdue.
+- The demo is kept in its own folder, `data/Demo/`. It never touches your sheets, and it is not listed among your uploads.
+- Each time you open the demo from the upload screen, it starts afresh. To start afresh without leaving, press **Reset demo data**.
+
+Press **Open a different sheet** to go back to the upload screen.
+
 ## Opening your sheet
 
 The tool opens on the **upload screen**. This is the normal way in.
@@ -47,6 +74,8 @@ To switch sheets, press **Open a different sheet** on the dashboard.
 ## What your sheet must have
 
 The first row of the sheet holds the column names. The tool understands several names for each column. Case does not matter, and `_` or `-` count as spaces.
+
+**Not sure your sheet fits?** On the upload screen, open **View sample sheet**. It lists every column, says which are required, and shows a small example. Press **Download sample sheet (CSV)** to get that example as a file. You can open it in Excel, fill in your own members, and upload it. Uploaded as it is, it opens straight on the dashboard with nothing to fix.
 
 **Required columns:**
 
@@ -82,13 +111,13 @@ Other columns are ignored.
 
 ## Your sheet is never changed
 
-The tool only ever reads your sheet. It never writes to it. Everything it saves goes into files next to its copy of your sheet:
+The tool only ever reads your sheet. It never writes to it. Everything you do on the dashboard is saved in files next to its copy of your sheet, so it is still there the next time you open it:
 
-- **`payments.csv`** holds the payments you record in the tool. New payments are added at the end. Nothing in it is ever changed or deleted.
-- **`members_clean.csv`** holds your sheet with the corrections you made on screen. When it exists, the tool uses it, and tells you so.
-- **`members_clean.csv.<date-time>.bak`** is an old set of corrections you chose to discard. It is moved aside, never deleted.
+- **`payments.csv`** holds the payments you record in the tool, including money paid when you add a new member. New payments are added at the end. Nothing in it is ever changed or deleted.
+- **`members_clean.csv`** holds your sheet with the corrections you made on screen and the members you added. When it exists, the tool uses it instead of the sheet, and tells you so.
+- **`members_clean.csv.<date-time>.bak`** is an old set of corrections you chose to discard, together with any memberships that were not in your sheet (including members you added on screen). It is moved aside, never deleted. Payments for those memberships stay in `payments.csv`; the dashboard lists them as warnings and does not count them until the memberships are back in the sheet.
 
-Please do not edit these files by hand.
+You can open these files in Excel to look at them. Please do not edit them by hand, and close them again before you record anything: while Excel has a file open, the tool cannot save to it and tells you so.
 
 ## Fixing problems in the sheet
 
@@ -118,6 +147,29 @@ Under the table is **Record a payment**.
 5. Press **Record payment**.
 
 The figures update straight away. The tool refuses a payment larger than what is still owed, and tells you the most you can enter. It warns you, but still lets you record, if the date is in the future or before the member joined.
+
+## Adding a member
+
+Under **Record a payment** is **Add a new member**.
+
+1. Type the **Member name**.
+2. Choose the **Membership type**: Monthly, Half-Yearly or Yearly.
+3. Check the **Date joined**. It starts at today.
+4. Type the **Membership amount**, the full price for the whole period, and the number of **Installments**.
+5. If the member paid something when joining, type it under **Paid at sign-up** and check its date. Otherwise leave it empty.
+6. Press **Add member**.
+
+The new member appears in the table, the totals and the **Member** list of Record a payment straight away. The tool gives them a new Member ID and Membership ID in the style your sheet already uses (for example `M025` and `MS-027`), never one that is already taken.
+
+**Starting a new gym:** a sheet with only the column names (download the sample sheet and delete its rows) opens an empty dashboard. Add your first member there.
+
+**Where it is saved:** the member is added to `members_clean.csv`, and money paid at sign-up is saved in `payments.csv` like any other payment. Your own sheet is not changed, so if you want the member in it too, add them there yourself.
+
+The tool refuses an empty name, an amount that is not money, installments below 1, or more paid than the membership costs. It also refuses a name that is already in your sheet on a row with no Member ID, because it could not tell the two people apart: give that member an ID in your sheet first, or add an initial to the new name. It warns you, but still lets you add, if a date is in the future, if the money was paid before the date joined, or if another member already has that name (it then adds a second, different person).
+
+**Please note:** if you later upload a changed copy of your sheet, the tool asks whether to keep your corrections. It also tells you how many memberships in your corrections are not in your sheet (including members added here) and names them. Choosing **Discard** sets those aside too (into the `.bak` file), and any payments recorded for them then show as warnings and are not counted. So add them to your sheet first.
+
+A name can be at most 100 characters and cannot start with `=`, `+`, `-` or `@` (Excel would treat it as a formula). The membership amount can be at most ₹1,00,00,000 and installments at most 120, to catch a slipped finger. You must choose the membership type yourself; there is no default.
 
 ## When is a payment late?
 
@@ -156,10 +208,12 @@ The design is in `.scratch/payment-visibility/` (`spec.md`, `TECHNICAL-PLAN.md`)
 python -m pytest -q
 ```
 
-`tests/test_golden.py` loads `src/files/Book1.csv` on 8 November 2026 and checks the figures worked out by hand: 19 memberships owing money, 11 of them overdue, ₹97,300 receivable and ₹60,950 overdue.
+`tests/test_golden.py` loads `src/files/Book1.csv` on 8 November 2026 and checks the figures worked out by hand: 19 memberships owing money, 11 of them overdue, ₹97,300 receivable and ₹60,950 overdue. `tests/test_demo.py` does the same for the demo gym (`src/files/demo_members.csv`): ₹70,500 receivable and ₹29,500 overdue on that day.
 
 ## What this version does not do
 
 - **No accounts or logins.** It is for one owner on one computer.
 - **No hosting.** It runs on your computer only, not on the internet.
 - **No overpayment.** A payment cannot be more than what is still owed. There is no credit or advance balance.
+- **One demo at a time.** The demo uses one folder on your computer. If two browser tabs both open the demo, they share it, and resetting it in one tab resets it for the other.
+- **Comma-separated CSV only.** Some versions of Excel save CSV files with semicolons (`;`) between the columns. The tool cannot read those; save the sheet as "CSV UTF-8 (comma delimited)" or as `.xlsx` instead.
