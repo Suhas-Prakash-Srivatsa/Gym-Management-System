@@ -11,12 +11,12 @@ Payment already counted is seen. Membership and Member IDs match exactly.
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from src.balances import next_due_on, outstanding_balance
 from src.identity import next_payment_id
 from src.models import Dataset, Membership, Payment
-from src.money import format_money, parse_money, quantize
+from src.money import format_money, is_whole_paise, parse_money, quantize
 from src.validation import Issue
 
 
@@ -80,20 +80,6 @@ def default_membership(dataset: Dataset, member_id: str, today: date) -> Members
     return min(owing or candidates, key=lambda m: next_due_on(m, dataset.payments))
 
 
-def _whole_paise(amount: Decimal) -> bool:
-    """Finite, and exactly representable in rupees and paise.
-
-    Never raises: `quantize` signals InvalidOperation for amounts beyond the
-    Decimal context's 28 digits (1E+30), and those are simply not money.
-    """
-    if not amount.is_finite():
-        return False
-    try:
-        return quantize(amount) == amount
-    except InvalidOperation:
-        return False
-
-
 def validate_payment(
     dataset: Dataset, membership: Membership, amount: Decimal, paid_on: date, today: date
 ) -> list[Issue]:
@@ -138,7 +124,7 @@ def _who(dataset: Dataset, membership: Membership) -> str:
 
 
 def _amount_issues(dataset: Dataset, membership: Membership, amount: Decimal, who: str) -> list[Issue]:
-    if not _whole_paise(amount):
+    if not is_whole_paise(amount):
         return [Issue(None, "amount", "invalid_amount",
                       f"{amount} is not an amount in rupees and paise (at most 2 decimals).")]
     if amount <= 0:
@@ -185,7 +171,7 @@ def build_payment(
     `6E+3`), which is what the ledger file accepts. Raises ValueError for an
     amount `validate_payment` calls invalid, rather than rounding money away.
     """
-    if not _whole_paise(amount):
+    if not is_whole_paise(amount):
         raise ValueError(f"Amount {amount} is not a whole number of paise.")
     stored = quantize(amount)
     return Payment(
@@ -233,9 +219,16 @@ def check_payment(
     `invalid_amount` error with `amount=None`; the date warnings are still
     reported, so the form can show everything at once. Never raises for
     anything typed.
+
+    One exception: while the form is untouched (no amount typed and the date
+    still today, its default) `paid_before_joining` is not reported. A
+    Membership that starts in the future would otherwise greet the owner
+    with a warning about a payment they have not begun to enter.
     """
     who = _who(dataset, membership)
     dated = _date_issues(membership, paid_on, today, who)
+    if not amount_text.strip() and paid_on == today:
+        dated = [i for i in dated if i.code != "paid_before_joining"]
     try:
         amount = parse_money(amount_text)
     except ValueError:

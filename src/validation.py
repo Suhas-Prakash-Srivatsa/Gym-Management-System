@@ -112,13 +112,18 @@ def check_membership_type(row: RawRow, row_number: int) -> list[Issue]:
                   ("enter_manually",))]
 
 
-def check_instalments(row: RawRow, row_number: int) -> list[Issue]:
+def is_valid_instalments(raw: str) -> bool:
     """A whole number written in ASCII digits, at least 1.
 
     `str.isdigit` alone is not enough: it accepts "²", which `int` rejects.
     """
+    return raw.isascii() and raw.isdigit() and int(raw) >= 1
+
+
+def check_instalments(row: RawRow, row_number: int) -> list[Issue]:
+    """Installments must pass `is_valid_instalments`."""
     raw = _value(row, "instalments")
-    if raw.isascii() and raw.isdigit() and int(raw) >= 1:
+    if is_valid_instalments(raw):
         return []
     return [Issue(row_number, "instalments", "invalid_instalments",
                   f"Row {row_number}: Installments '{raw}' must be a whole number of at least 1.",

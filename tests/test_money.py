@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.money import format_money, parse_money, quantize
+from src.money import format_money, is_whole_paise, parse_money, quantize
 
 
 @pytest.mark.parametrize(
@@ -64,3 +64,11 @@ def test_quantize_rounds_half_up_to_two_places(value, expected):
 )
 def test_format_money_uses_indian_grouping_and_shows_paise_only_when_present(amount, expected):
     assert format_money(amount) == expected
+
+
+@pytest.mark.parametrize("amount, whole", [
+    (Decimal("6000"), True), (Decimal("0.01"), True), (Decimal("100.005"), False),
+    (Decimal("NaN"), False), (Decimal("Infinity"), False), (Decimal("1E+30"), False),
+])
+def test_is_whole_paise(amount, whole):
+    assert is_whole_paise(amount) is whole

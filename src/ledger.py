@@ -16,7 +16,7 @@ from src.models import Payment
 
 # next_payment_id lives in identity.py (pure core, beside the other ID rules);
 # re-exported so `from src.ledger import next_payment_id` keeps working.
-__all__ = ["COLUMNS", "read_payments", "append_payment", "next_payment_id"]
+__all__ = ["COLUMNS", "read_payments", "append_payment", "check_appendable", "next_payment_id"]
 
 COLUMNS = ("payment_id", "membership_id", "amount", "paid_on", "source", "recorded_at")
 
@@ -89,11 +89,7 @@ def append_payment(path, payment: Payment) -> None:
     """
     path = Path(path)
     _amount(str(payment.amount))
-    new = not path.exists() or path.stat().st_size == 0
-    if not new:
-        header = _header(path)
-        if header != list(COLUMNS):
-            raise ValueError(_header_problem(path, header))
+    new = check_appendable(path)
     unterminated = not new and not _ends_with_newline(path)
     with path.open("a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -109,6 +105,27 @@ def append_payment(path, payment: Payment) -> None:
             payment.source,
             payment.recorded_at.isoformat(),
         ])
+
+
+def check_appendable(path) -> bool:
+    """Raise when a Payment could not be appended to the ledger at `path` right now.
+
+    ValueError for a header that is not exactly COLUMNS; PermissionError
+    when the file cannot be opened for appending (open in Excel). Lets a
+    caller that saves something else first (adding a member with money paid
+    at sign-up) find out before writing anything; the disk can of course
+    still fail in between. Writes nothing. Returns True when the file does
+    not exist yet (or is empty), so the next append creates it.
+    """
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return True
+    header = _header(path)
+    if header != list(COLUMNS):
+        raise ValueError(_header_problem(path, header))
+    with path.open("ab"):  # raises PermissionError while Excel holds it
+        pass
+    return False
 
 
 def _header_problem(path: Path, header: list[str]) -> str:

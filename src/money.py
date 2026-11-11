@@ -1,7 +1,7 @@
 """Rupees that add up: every monetary value in the system is a Decimal."""
 
 import re
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 # \d deliberately accepts any Unicode decimal digit ("١٢"): Decimal parses them
 # correctly and every amount is written back in ASCII digits.
@@ -25,6 +25,20 @@ def parse_money(raw: str) -> Decimal:
 def quantize(d: Decimal) -> Decimal:
     """Round to two decimal places, half up."""
     return d.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+
+
+def is_whole_paise(amount: Decimal) -> bool:
+    """Finite, and exactly representable in rupees and paise.
+
+    Never raises: `quantize` signals InvalidOperation for amounts beyond the
+    Decimal context's 28 digits (1E+30), and those are simply not money.
+    """
+    if not amount.is_finite():
+        return False
+    try:
+        return quantize(amount) == amount
+    except InvalidOperation:
+        return False
 
 
 def format_money(d: Decimal) -> str:

@@ -1,0 +1,16 @@
+Member ID,Member Name,Membership ID,Membership Type,Date Joined,Membership Amount,Installments,Paid Amount,Last Payment Date
+D001,Aarav Sharma,DM-001,Yearly,2026-03-01,15000,3,10000,2026-07-01
+D002,Isha Patel,DM-002,Monthly,2026-10-20,2500,1,0,
+D003,Kabir Mehta,DM-003,Half-Yearly,2026-06-15,10000,2,5000,2026-06-15
+D004,Zoya Ali,DM-004,Yearly,2026-01-05,14000,2,14000,2026-07-05
+D005,Rohan Das,DM-005,Monthly,2026-09-01,2500,1,0,
+D006,Tara Fernandes,DM-006,Half-Yearly,2026-08-10,10000,2,5000,2026-08-10
+D007,Vivek Rao,DM-007,Yearly,2026-09-20,15000,3,5000,2026-09-20
+D008,Anika Bhat,DM-008,Monthly,2026-11-01,2500,1,2500,2026-11-01
+D009,Farhan Qureshi,DM-009,Yearly,2025-10-01,13000,2,13000,2026-04-01
+D009,Farhan Qureshi,DM-010,Yearly,2026-10-01,15000,2,7500,2026-10-01
+D010,Leela Menon,DM-011,Half-Yearly,2026-05-01,10000,2,5000,2026-05-01
+D011,Siddharth Jain,DM-012,Yearly,2026-07-15,15000,3,5000,2026-09-15
+D012,Meher Kapoor,DM-013,Monthly,2026-10-05,2500,1,1500,2026-10-05
+D013,Nikhil Bose,DM-014,Half-Yearly,2026-10-25,10000,2,0,
+D014,Gauri Sinha,DM-015,Yearly,2026-02-14,14000,2,7000,2026-02-14

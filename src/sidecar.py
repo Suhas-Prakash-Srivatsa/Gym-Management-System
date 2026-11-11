@@ -1,11 +1,13 @@
 """Where derived files live (shell): sidecars beside the owner's sheet (ADR 0002).
 
 The input sheet is read, never written. Recorded payments go to
-`payments.csv` and in-dashboard corrections to `members_clean.csv`, both in
+`payments.csv`; in-dashboard corrections and members added on the
+dashboard go to `members_clean.csv`; both in
 the input's folder; on later runs the cleaned sidecar takes precedence, and
 `resolve_input` says when it did so the owner knows they see corrected data.
 """
 
+import contextlib
 import csv
 import io
 import os
@@ -14,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from src.identity import effective_membership_ids
 from src.models import RawRow
 from src.sheet import HEADER_ALIASES, read_rows
 
@@ -73,12 +76,19 @@ def write_clean_members(path, rows: list[RawRow]) -> None:
     columns = ["member_id", *(c for c in _CANONICAL if c in present and c != "member_id"),
                *(c for c in present if c not in _CANONICAL)]
     temp = path.with_name(path.name + ".tmp")
-    with temp.open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(columns)
-        for row in rows:
-            writer.writerow([row.get(c) or "" for c in columns])
-    os.replace(temp, path)
+    try:
+        with temp.open("w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(columns)
+            for row in rows:
+                writer.writerow([row.get(c) or "" for c in columns])
+        os.replace(temp, path)
+    except PermissionError as exc:
+        # Most likely members_clean.csv is open in Excel: name that file, not
+        # the temporary one, and leave no .tmp behind.
+        with contextlib.suppress(OSError):
+            temp.unlink(missing_ok=True)
+        raise PermissionError(exc.errno, exc.strerror, str(path)) from exc
 
 
 @dataclass(frozen=True)
@@ -286,6 +296,27 @@ def corrections_stale(input_path) -> bool:
     return clean.exists() and os.stat(input_path).st_mtime_ns > os.stat(clean).st_mtime_ns
 
 
+def rows_only_in_corrections(input_path) -> list[RawRow]:
+    """Rows of `members_clean.csv` whose Membership ID the sheet does not have.
+
+    These include the members added on the dashboard, but also a corrected
+    Membership ID or a member since deleted from the sheet: discarding the
+    corrections would set them aside, so the shell names them first. Rows
+    are matched by the Membership ID typed in the sidecar against the IDs the
+    sheet's rows would assemble under; a row without a typed ID is never
+    counted (added members always carry one). Either file being unreadable
+    counts as none, so the question can still be asked.
+    """
+    try:
+        clean = read_clean_members(clean_members_path(input_path)) or []
+        sheet_rows, _ = read_rows(input_path)
+    except (ValueError, UnicodeDecodeError):
+        return []
+    in_sheet = set(effective_membership_ids(sheet_rows))
+    return [r for r in clean
+            if (typed := (r.get("membership_id") or "").strip()) and typed not in in_sheet]
+
+
 def discard_corrections(input_path, stamp: datetime) -> Path | None:
     """Stop using the cleaned sidecar. It is moved aside, never deleted.
 
@@ -305,6 +336,67 @@ def discard_corrections(input_path, stamp: datetime) -> Path | None:
         backup = clean.with_name(f"{base}-{n}{BACKUP_SUFFIX}")
     os.replace(clean, backup)
     return backup
+
+
+# --- The demo gym ---
+
+# Not `<stem>_<ext>`, so working_copies never lists the demo among the owner's
+# uploads, and no upload can ever land in it.
+DEMO_FOLDER = "Demo"
+DEMO_SHEET_NAME = "demo_gym.csv"
+
+
+def demo_path(data_dir) -> Path:
+    """Where the demo's working copy lives: its own folder in the data folder."""
+    return Path(data_dir).resolve() / DEMO_FOLDER / DEMO_SHEET_NAME
+
+
+def is_demo(data_dir, input_path) -> bool:
+    """True when `input_path` is the demo's working copy, so the shell can say so."""
+    return Path(input_path).resolve() == demo_path(data_dir)
+
+
+def reset_demo(data_dir, data: bytes) -> Path:
+    """Start the demo afresh from `data` and return its working copy.
+
+    The demo folder only ever holds files the tool made (the demo sheet, its
+    `payments.csv`, `members_clean.csv` and backups), so they are deleted
+    rather than moved aside: payments recorded and members added in the demo
+    go, and nothing of the owner's is touched.
+
+    All or nothing, as far as Windows allows. A file open in Excel cannot be
+    opened for writing, so every file is first opened that way, and a
+    PermissionError naming the locked file (for the shell to explain) stops
+    the reset before anything is deleted. Should a delete still fail,
+    `members_clean.csv` goes before `payments.csv`, so an added member is
+    never left without their payments (a payment left without its member is
+    reported on the dashboard, never silently counted). The sheet is
+    replaced last and never deleted; if only that fails, DemoResetIncomplete
+    says the sidecars were already cleared.
+    """
+    path = demo_path(data_dir)
+    folder = path.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    files = [f for f in folder.iterdir() if f.is_file()]
+    for f in files:
+        with f.open("ab"):  # raises PermissionError while Excel holds it
+            pass
+    order = {CLEAN_MEMBERS_NAME: 0, PAYMENTS_NAME: 1}
+    for leftover in sorted((f for f in files if f != path), key=lambda f: order.get(f.name, 2)):
+        leftover.unlink()
+    temp = path.with_name(path.name + ".tmp")
+    try:
+        temp.write_bytes(data)
+        os.replace(temp, path)
+    except PermissionError as exc:
+        with contextlib.suppress(OSError):
+            temp.unlink(missing_ok=True)
+        raise DemoResetIncomplete(exc.errno, exc.strerror, str(path)) from exc
+    return path
+
+
+class DemoResetIncomplete(PermissionError):
+    """The demo's payments and added members were cleared, but its sheet could not be replaced."""
 
 
 def keep_corrections(input_path) -> None:

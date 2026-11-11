@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.identity import next_payment_id
-from src.ledger import COLUMNS, append_payment, read_payments
+from src.ledger import COLUMNS, append_payment, check_appendable, read_payments
 from src.models import Payment
 from src.sheet import read_rows
 from src.sidecar import (
@@ -488,3 +488,28 @@ def test_append_refuses_a_ledger_with_an_added_column_and_names_it(tmp_path):
         append_payment(ledger, payment())
     assert "order" not in str(refused.value)  # nothing was reordered; don't send the owner looking
     assert ledger.read_bytes() == content
+
+
+def test_check_appendable_says_whether_a_payment_could_be_added(tmp_path):
+    ledger = tmp_path / "payments.csv"
+    assert check_appendable(ledger) is True  # will be created
+    ledger.write_text(",".join(COLUMNS) + "\n", encoding="utf-8")
+    assert check_appendable(ledger) is False
+    ledger.write_text(",".join(COLUMNS) + ",Notes\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Notes"):
+        check_appendable(ledger)
+
+
+def test_check_appendable_finds_a_ledger_open_in_excel(tmp_path, monkeypatch):
+    ledger = tmp_path / "payments.csv"
+    ledger.write_text(",".join(COLUMNS) + "\n", encoding="utf-8")
+    real_open = Path.open
+
+    def opened(self, mode="r", *args, **kwargs):
+        if "a" in mode:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opened)
+    with pytest.raises(PermissionError):
+        check_appendable(ledger)

@@ -385,3 +385,14 @@ def test_a_check_splits_its_issues_into_errors_and_warnings(book1):
 def test_memberships_of_a_member_are_in_sheet_order(book1):
     assert [m.membership_id for m in memberships_of(book1, "M009")] == ["MS-009", "MS-026"]
     assert memberships_of(book1, "m009") == []
+
+
+def test_an_untouched_form_does_not_warn_about_paying_before_joining(book1):
+    # MS-022 starts on 2026-11-05; seen on 2026-11-04 with nothing entered yet.
+    ms = _membership(book1, "MS-022")
+    day = date(2026, 11, 4)
+    assert check_payment(book1, ms, "", day, day).warnings == ()
+    typed = check_payment(book1, ms, "500", day, day)
+    assert [w.code for w in typed.warnings] == ["paid_before_joining"]
+    picked = check_payment(book1, ms, "", date(2026, 11, 3), day)
+    assert [w.code for w in picked.warnings] == ["paid_before_joining"]
